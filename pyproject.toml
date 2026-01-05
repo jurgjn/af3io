@@ -1,7 +1,7 @@
 [project]
 name = "af3io"
-version = "0.1"
-description = "Utilities for AlphaFold 3 input & predictions"
+version = "0.2-dev"
+description = "Utilities for AlphaFold 3 input/output files"
 readme = "README.md"
 authors = [
     { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
