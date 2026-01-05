@@ -1,6 +1,6 @@
 [project]
 name = "af3io"
-version = "0.1-dev"
+version = "0.1"
 description = "Utilities for AlphaFold 3 input & predictions"
 readme = "README.md"
 authors = [
@@ -10,9 +10,6 @@ requires-python = ">=3.10"
 dependencies = [
     "click",
     "humanfriendly",
-    "pillow",
-    "pyoxipng",
-    "snakemake",
 ]
 
 [project.scripts]

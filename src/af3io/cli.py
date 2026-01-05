@@ -3,10 +3,10 @@ import collections, contextlib, filecmp, glob, io, json, os, os.path, subprocess
 from pathlib import Path
 from pprint import pprint
 
-import numpy as np, PIL, PIL.Image, oxipng, click
+import click
 import af3io
 
-@click.group(help='Utilities for AlphaFold 3 input & predictions')
+@click.group(help='Utilities for AlphaFold 3 input/output files')
 def cli():
     pass
 
