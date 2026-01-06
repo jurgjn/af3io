@@ -10,4 +10,10 @@ def _open_r(path):
     except:
         return path
 
-__all__ = ['_open_r']
+def uf(x):
+    return '{:,}'.format(x)
+
+def ul(x):
+    return uf(len(x))
+
+__all__ = ['_open_r', 'uf', 'ul']

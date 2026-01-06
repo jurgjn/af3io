@@ -1,5 +1,5 @@
 
-import collections, contextlib, filecmp, glob, io, json, os, os.path, subprocess, time, zipfile
+import collections, contextlib, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile
 from pathlib import Path
 from pprint import pprint
 
@@ -7,35 +7,83 @@ import click
 import af3io
 
 @click.group(help='Utilities for AlphaFold 3 input/output files')
+@click.version_option(package_name='af3io')
 def cli():
     pass
 
-@cli.command(help='Show contents of an input json using compact notation')
+@cli.command(short_help='Show compact summary of an input JSON')
 @click.argument('input_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def input_show(input_json):
+    """Shows a compact summary of an input JSON with data pipeline strings (pairedMsa, unpairedMsa, templates)
+    summarised by their size & short hash of the contents.
+
+    Useful for comparing two input JSON files, see input_diff.ipynb.
+    """
     af3io.input.pprint(af3io.input.read(str(input_json.resolve())))
 
-@cli.command(help='Create input json from sequences specified as arguments')
+@cli.command(short_help='Create an input JSON from sequences as command-line arguments')
+@click.option('--version', default=2)
+@click.option('--model_seed', default=1)
 @click.option('--type', multiple=True)
 @click.option('--id', multiple=True)
 @click.option('--sequence', multiple=True)
-@click.argument('json_path', type=click.Path(exists=False, file_okay=False, readable=False, path_type=Path))
-def input_create(type, id, sequence, json_path):
-    # Name attribute inferred from json_path
-    # TODO - check for name sanity?
-    js = af3io.input.init(name=json_path.stem)
+@click.argument('json_path', type=click.Path(file_okay=True, writable=True, path_type=Path))
+def input_create(version, model_seed, type, id, sequence, json_path):
+    """Creates an input JSON from protein/DNA/RNA sequences specified as command-
+    line arguments.
+
+    The name field is inferred from json_path and checked for compatibility with
+    AlphaFold 3 (alphanumeric lower case and -._).
+    """
+
+    # Check name attribute
+    name = json_path.stem
+    if name == af3io.input.sanitised_name(name):
+        click.echo(f'Setting name to: {name}')
+    else:
+        raise click.UsageError(f'{name}.json is not sanitised (maybe try: {af3io.input.sanitised_name(name)}.json)')
+
+    # Assume protein unless specified otherwise
+    if len(type) == 0:
+        type = list(itertools.repeat('protein', len(sequence)))
+
+    # Auto-enumerate if --id not specified
+    if len(id) == 0:
+        id = list(itertools.islice(af3io.input.enumerate_chains(), len(sequence)))
+
+    js = af3io.input.init(
+        version = version,
+        name = name,
+        modelSeeds = [model_seed],
+    )
     for type_, id_, sequence_ in zip(type, id, sequence):
         js['sequences'].append(collections.OrderedDict([(type_, collections.OrderedDict([('id', id_),('sequence', sequence_)]))]))
 
+    click.echo(f'Write:\t{str(json_path.resolve())}')
     af3io.input.write(js=js, path=str(json_path.resolve()))
 
-@cli.command(help='Lift over data pipeline strings from pre-computed output')
+@cli.command(short_help='Copy data pipeline strings from existing output')
 @click.option('--write-index', is_flag=True, default=False)
 @click.option('--data_dir', default=None)
 @click.option('--json_path', default=None)
 @click.option('--input_dir', default=None)
 @click.option('--output_dir')
 def data_fill(write_index, data_dir, json_path, input_dir, output_dir):
+    """ Reads an input JSON, fills in data pipeline strings from matching sequences
+    found in files under --data_dir. Files produced under --output_dir can then
+    be used as input for AlphaFold 3 inference, skipping the data pipeline step.
+
+    Files under --data_dir can be either plain JSON (_data.json) or compressed
+    with gzip (_data.json.gz).
+
+    Data pipeline output is matched by sequence, there is no need to keep a
+    consistent set of sequence identifiers (across projects/people/labs) and/or
+    file names while still sharing data pipeline output.
+
+    For more than a handful of files in --data_dir, use --write-index to pre-compute
+    a sequence-JSON lookup table. This avoids excessive I/O from repeatedly reading
+    every file under --data_dir.
+    """
 
     data_index_path = os.path.join(data_dir, '.af3io_data_index.json')
     if os.path.isfile(data_index_path):
