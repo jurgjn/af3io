@@ -29,10 +29,23 @@ def create_index(path):
                     index[seq_type][ seq_fields['sequence'] ] = str(path.resolve())
     return index
 
-def lookup(js, index):
+def lookup(js, index, missing_dir=None):
     js = copy.deepcopy(js)
     for seq_type, seq_fields in input.iter_sequences(js):
-        seq_fields['dataPath'] = index[ seq_type ][ seq_fields['sequence'] ]
+        try:
+            seq_fields['dataPath'] = index[ seq_type ][ seq_fields['sequence'] ]
+        except KeyError:
+            if missing_dir is not None:
+                js_missing = input.init()
+                js_missing['name'] = input.sanitised_name(f'{js["name"]}_{seq_fields["id"]}')
+                js_missing['sequences'].append(collections.OrderedDict([(seq_type, collections.OrderedDict([('id', seq_fields['id']),('sequence', seq_fields['sequence'])]))]))
+                path_missing = os.path.join(missing_dir, f"{js_missing['name']}.json")
+                click.echo(f'Write:\t{path_missing}')
+                input.write(js_missing, path_missing)
+            else:
+                click.echo(f"Sequence not in data index: {seq_type}/{seq_fields['sequence']}")
+                raise
+
     return js
 
 def fill(js):

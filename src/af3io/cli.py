@@ -14,7 +14,7 @@ def cli():
 @cli.command(short_help='Show compact summary of an input JSON')
 @click.argument('input_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def input_show(input_json):
-    """Shows a compact summary of an input JSON with data pipeline strings (pairedMsa, unpairedMsa, templates)
+    """Show a compact summary of an input JSON with data pipeline strings (pairedMsa, unpairedMsa, templates)
     summarised by their size & short hash of the contents.
 
     Useful for comparing two input JSON files, see input_diff.ipynb.
@@ -29,7 +29,7 @@ def input_show(input_json):
 @click.option('--sequence', multiple=True)
 @click.argument('json_path', type=click.Path(file_okay=True, writable=True, path_type=Path))
 def input_create(version, model_seed, type, id, sequence, json_path):
-    """Creates an input JSON from protein/DNA/RNA sequences specified as command-
+    """Create an input JSON from protein/DNA/RNA sequences specified as command-
     line arguments.
 
     The name field is inferred from json_path and checked for compatibility with
@@ -63,28 +63,47 @@ def input_create(version, model_seed, type, id, sequence, json_path):
     af3io.input.write(js=js, path=str(json_path.resolve()))
 
 @cli.command(short_help='Copy data pipeline strings from existing output')
-@click.option('--write-index', is_flag=True, default=False)
-@click.option('--data_dir', default=None, multiple=True)
-#@click.option('--missing_dir', default=None)
-@click.option('--json_path', default=None)
-@click.option('--input_dir', default=None)
-@click.option('--output_dir')
-def data_fill(write_index, data_dir, json_path, input_dir, output_dir):
-    """ Reads an input JSON, fills in data pipeline strings from matching sequences
+@click.option('--write-index', is_flag=True, default=False, help='Compute a sequence to data JSON lookup table.')
+@click.option('--data_dir', default=None, multiple=True, help='Path to _data.json files, can specify multiple times.')
+@click.option('--json_path', default=None, help='Path to input JSON file.')
+@click.option('--input_dir', default=None, help='Path to directory with input JSON files.')
+@click.option('--output_dir', default=None, help='Path to output directory.')
+@click.option('--missing_dir', default=None, help='Path for missing sequence JSON files.')
+def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_dir):
+    """Read an input JSON, fill in data pipeline strings from matching sequences
     found in files under --data_dir. Files produced under --output_dir can then
     be used as input for AlphaFold 3 inference, skipping the data pipeline step.
 
     Files under --data_dir can be either plain JSON (_data.json) or compressed
-    with gzip (_data.json.gz).
+    with gzip (_data.json.gz). Can specify --data_dir multiple times.
 
     Data pipeline output is matched by sequence, there is no need to keep a
     consistent set of sequence identifiers (across projects/people/labs) and/or
     file names while still sharing data pipeline output.
 
-    For more than a handful of files in --data_dir, use --write-index to pre-compute
-    a sequence-JSON lookup table. This avoids excessive I/O from repeatedly reading
-    every file under --data_dir.
+    For more than a handful of files in --data_dir, use --write-index to pre-
+    compute a sequence-JSON lookup table. This avoids excessive I/O from
+    repeatedly reading every file under --data_dir. The index is stored in
+    .af3io_data_index.json under --data_dir as a plain-text JSON.
+
+    If (some) sequences do not have data pipeline output, use --missing_dir to
+    generate input JSON files, one per missing sequence. These can then be used
+    as input for the AlphaFold 3 data pipeline. The data pipeline output can
+    then be added as an additional --data_dir argument.
     """
+
+    if (json_path is not None) and (input_dir is None):
+        input_jsons = [ json_path ]
+    elif (json_path is None) and (input_dir is not None):
+        input_jsons = glob.glob(os.path.join(input_dir, '*.json'))
+    elif (json_path is None) and (input_dir is None):
+        input_jsons = []
+    else:
+        assert False, 'Cannot specify both --json_path and --input_dir'
+
+    if (output_dir is not None) and (output_dir is not None):
+        assert False, 'Cannot specify both --output_dir and --missing_dir'
+
     data_index = { 'protein': dict(), 'dna': dict(), 'rna': dict() }
     for data_i_dir in data_dir:
         data_i_index_path = os.path.join(data_i_dir, '.af3io_data_index.json')
@@ -108,24 +127,15 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir):
 
     click.echo(f'Data index has {len(data_index['protein'])} protein, {len(data_index['dna'])} dna, {len(data_index['rna'])} rna sequence(s)')
 
-    if (json_path is not None) and (input_dir is None):
-        input_jsons = [ json_path ]
-    elif (json_path is None) and (input_dir is not None):
-        input_jsons = glob.glob(os.path.join(input_dir, '*.json'))
-    elif (json_path is None) and (input_dir is None):
-        input_jsons = []
-    else:
-        assert False, 'Specify only one of --json_path/--input_dir'
-
     for input_json in input_jsons:
         click.echo(f'Read:\t{input_json}')
         js = af3io.input.read(input_json)
-        js = af3io.data.lookup(js, data_index)
-        js = af3io.data.fill(js)
-
-        output_json = os.path.join(output_dir, Path(input_json).stem.removesuffix('_data') + '_data.json')
-        click.echo(f'Write:\t{output_json}')
-        af3io.input.write(js, output_json)
+        js = af3io.data.lookup(js, data_index, missing_dir=missing_dir)
+        if output_dir is not None:
+            js = af3io.data.fill(js)
+            output_json = os.path.join(output_dir, Path(input_json).stem.removesuffix('_data') + '_data.json')
+            click.echo(f'Write:\t{output_json}')
+            af3io.input.write(js, output_json)
 
 '''
 @cli.command(help='Compress AlphaFold3 predictions')

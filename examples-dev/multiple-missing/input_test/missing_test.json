@@ -1,0 +1,32 @@
+{
+    "name": "missing_test",
+    "sequences": [
+      {
+        "protein": {
+          "id": "A",
+          "sequence": "MPKHEFSVDMTCGGCAEAVSRVLNKLGGVKYDIDLPNKKVCIESEHSMDTLLATLKKTGKTVSYLGLE"
+        }
+      },
+      {
+        "protein": {
+          "id": "B",
+          "sequence": "AAAA"
+        }
+      },
+      {
+        "dna": {
+          "id": "C",
+          "sequence": "ACGT"
+        }
+      },
+      {
+        "rna": {
+          "id": "D",
+          "sequence": "ACGU"
+        }
+      }
+    ],
+    "modelSeeds": [1],
+    "dialect": "alphafold3",
+    "version": 1
+  }
