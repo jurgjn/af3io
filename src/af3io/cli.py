@@ -64,7 +64,8 @@ def input_create(version, model_seed, type, id, sequence, json_path):
 
 @cli.command(short_help='Copy data pipeline strings from existing output')
 @click.option('--write-index', is_flag=True, default=False)
-@click.option('--data_dir', default=None)
+@click.option('--data_dir', default=None, multiple=True)
+#@click.option('--missing_dir', default=None)
 @click.option('--json_path', default=None)
 @click.option('--input_dir', default=None)
 @click.option('--output_dir')
@@ -84,22 +85,28 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir):
     a sequence-JSON lookup table. This avoids excessive I/O from repeatedly reading
     every file under --data_dir.
     """
+    data_index = { 'protein': dict(), 'dna': dict(), 'rna': dict() }
+    for data_i_dir in data_dir:
+        data_i_index_path = os.path.join(data_i_dir, '.af3io_data_index.json')
+        if os.path.isfile(data_i_index_path):
+            click.echo(f'Load data index from: {data_i_index_path}')
+            with open(data_i_index_path, 'r') as fh:
+                data_i_index = json.load(fh)
+        else:
+            click.echo(f'Create data index from: {data_i_dir}')
+            data_i_index = af3io.data.create_index(data_i_dir)
+        click.echo(f'Read {len(data_i_index['protein'])} protein sequence(s)')
 
-    data_index_path = os.path.join(data_dir, '.af3io_data_index.json')
-    if os.path.isfile(data_index_path):
-        click.echo(f'Load data index from: {data_index_path}')
-        with open(data_index_path, 'r') as fh:
-            data_index = json.load(fh)
-    else:
-        click.echo(f'Create data index from: {data_dir}')
-        data_index = af3io.data.create_index(data_dir)
+        if write_index:
+            click.echo(f'Writing index to: {data_i_index_path}')
+            with open(data_i_index_path, 'w') as fh:
+                json.dump(data_i_index, fh, indent=2)
 
-    click.echo(f'Data index has {len(data_index['protein'])} protein sequences')
+        for data_type in ['protein', 'dna', 'rna']:       
+            if data_type in data_i_index.keys():
+                data_index[data_type].update(data_i_index[data_type])
 
-    if write_index:
-        click.echo(f'Writing index to: {data_index_path}')
-        with open(data_index_path, 'w') as fh:
-            json.dump(data_index, fh, indent=2)
+    click.echo(f'Data index has {len(data_index['protein'])} protein, {len(data_index['dna'])} dna, {len(data_index['rna'])} rna sequence(s)')
 
     if (json_path is not None) and (input_dir is None):
         input_jsons = [ json_path ]
