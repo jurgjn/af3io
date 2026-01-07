@@ -101,7 +101,7 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
     else:
         assert False, 'Cannot specify both --json_path and --input_dir'
 
-    if (output_dir is not None) and (output_dir is not None):
+    if (output_dir is not None) and (missing_dir is not None):
         assert False, 'Cannot specify both --output_dir and --missing_dir'
 
     data_index = { 'protein': dict(), 'dna': dict(), 'rna': dict() }
