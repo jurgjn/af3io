@@ -63,12 +63,16 @@ def pprint(js, max_size=500):
             return js
         for k, v in js.items():
             if k in {'unpairedMsa', 'pairedMsa'} and len(v) > max_size:
-                lines_ = ul(v.splitlines())
+                seqs_ = uf(len(v.splitlines())//2)
                 size_ = humanfriendly.format_size(len(v))
                 hash_ = hashlib.sha1(v.encode()).hexdigest()[:6]
-                js[k] = f'<{lines_} lines, {size_}, sha1: {hash_}>'
+                js[k] = f'<{seqs_} sequences, {size_}, hash: {hash_}>'
             elif k == 'templates':
-                js[k] = f'<{ul(json.dumps(v, indent=2).splitlines())} lines>'
+                count_ = ul(v)
+                str_ = json.dumps(v, indent=2)
+                size_ = humanfriendly.format_size(len(str_))
+                hash_ = hashlib.sha1(str_.encode()).hexdigest()[:6]
+                js[k] = f'<{count_} templates, {size_}, hash: {hash_}>'
             elif isinstance(v, collections.abc.Mapping):
                 js[k] = iter_(v)
             elif isinstance(v, list):
