@@ -63,12 +63,25 @@ def input_create(version, model_seed, type, id, sequence, json_path):
     af3io.input.write(js=js, path=str(json_path.resolve()))
 
 @cli.command(short_help='Copy data pipeline strings from existing output')
-@click.option('--write-index', is_flag=True, default=False, help='Compute a sequence to data JSON lookup table.')
-@click.option('--data_dir', default=None, multiple=True, help='Path to _data.json files, can specify multiple times.')
-@click.option('--json_path', default=None, help='Path to input JSON file.')
-@click.option('--input_dir', default=None, help='Path to directory with input JSON files.')
-@click.option('--output_dir', default=None, help='Path to output directory.')
-@click.option('--missing_dir', default=None, help='Path for missing sequence JSON files.')
+@click.option('--write-index', is_flag=True, default=False,
+    help='Write a sequence to data JSON lookup table.',
+)
+@click.option('--data_dir', default=None, multiple=True,
+    help='Path to _data.json files, can specify multiple times.',
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option('--json_path', default=None, help='Path to input JSON file.',
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+)
+@click.option('--input_dir', default=None, help='Path to directory with input JSON files.',
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option('--output_dir', default=None, help='Path to output directory.',
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, writable=True, path_type=Path),
+)
+@click.option('--missing_dir', default=None, help='Path for missing sequence JSON files.',
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, writable=True, path_type=Path),
+)
 def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_dir):
     """Read an input JSON, fill in data pipeline strings from matching sequences
     found in files under --data_dir. Files produced under --output_dir can then
