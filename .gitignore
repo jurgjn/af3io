@@ -1,3 +1,6 @@
+# Development examples
+examples-dev/
+
 # Python-generated files
 __pycache__/
 *.py[oc]
