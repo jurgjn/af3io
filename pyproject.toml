@@ -1,6 +1,6 @@
 [project]
 name = "af3io"
-version = "0.2"
+version = "0.3-dev"
 description = "Utilities for AlphaFold 3 input/output files"
 readme = "README.md"
 authors = [

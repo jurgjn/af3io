@@ -127,7 +127,7 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
         else:
             click.echo(f'Create data index from: {data_i_dir}')
             data_i_index = af3io.data.create_index(data_i_dir)
-        click.echo(f'Read {len(data_i_index['protein'])} protein sequence(s)')
+        click.echo(f'Read {len(data_i_index.get('protein', []))} protein, {len(data_i_index.get('dna', []))} dna, {len(data_i_index.get('rna', []))} rna sequence(s)')
 
         if write_index:
             click.echo(f'Writing index to: {data_i_index_path}')
