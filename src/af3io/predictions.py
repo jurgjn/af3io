@@ -6,6 +6,10 @@ from pathlib import Path
 import pandas as pd
 
 class Predictions:
+    """
+        Read AlphaFold3 predictions where the output directory from a single job has been compressed as a zip archive
+        Handles the change in "file name layout" (introduced in ~b78e215) where every output file now starts with the AlphaFold 3 job name..
+    """
     def __init__(self, path):
         # find/assign name (from path)
         self.path = Path(path)
@@ -31,7 +35,7 @@ class Predictions:
         #print(f'Reading ranking_scores from:', self.ranking_scores_path)
         self.ranking_scores = pd.read_csv(self._read(self.ranking_scores_path), sep=',')
 
-        # Add model/confidence paths as columns to ranking_scores
+        # Add model/confidence paths as columns to self.ranking_scores
         if self._file_layout == 0:
             self.ranking_scores['model_path'] =               [ *map(lambda seed, sample: f'{self.name}/seed-{seed}_sample-{sample}/model.cif', self.ranking_scores['seed'], self.ranking_scores['sample'])]
             self.ranking_scores['summary_confidences_path'] = [ *map(lambda seed, sample: f'{self.name}/seed-{seed}_sample-{sample}/summary_confidences.json', self.ranking_scores['seed'], self.ranking_scores['sample'])]
@@ -65,5 +69,6 @@ class Predictions:
         return merge_
 
 def read_summary_confidences(path):
+    # Wrapper to "just get the iptm scores"
     p = Predictions(path)
     return p.read_summary_confidences()
