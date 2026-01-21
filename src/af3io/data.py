@@ -30,22 +30,26 @@ def create_index(path):
     return index
 
 def lookup(js, index, missing_dir=None):
+    """ Match chains by sequence, set dataPath based on the index
+    Note: this changes index by adding missing sequences with dataPath set to None
+    This is to keep track of missing sequences already identified in earlier input JSON files 
+    """
     js = copy.deepcopy(js)
-    missing_seq = set() # contains (type, seq) tuples to track missing JSONs already written to missing_dir/
     for seq_type, seq_fields in input.iter_sequences(js):
         try:
             seq_fields['dataPath'] = index[ seq_type ][ seq_fields['sequence'] ]
         except KeyError:
             if (missing_dir is not None):
-                if not ((seq_type, seq_fields['sequence']) in missing_seq):
-                    js_missing = input.init()
-                    js_missing['name'] = input.sanitised_name(f'{js["name"]}_{seq_fields["id"]}')
-                    js_missing['sequences'].append(collections.OrderedDict([(seq_type, collections.OrderedDict([('id', seq_fields['id']),('sequence', seq_fields['sequence'])]))]))
-                    path_missing = os.path.join(missing_dir, f"{js_missing['name']}.json")
-                    click.echo(f'Write:\t{path_missing}')
-                    input.write(js_missing, path_missing)
-                    missing_seq |= { (seq_type, seq_fields['sequence']) }
-                    pprint(missing_seq)
+                # Write monomer JSON for missing sequence
+                js_missing = input.init()
+                js_missing['name'] = input.sanitised_name(f'{js["name"]}_{seq_fields["id"]}')
+                js_missing['sequences'].append(collections.OrderedDict([(seq_type, collections.OrderedDict([('id', seq_fields['id']),('sequence', seq_fields['sequence'])]))]))
+                path_missing = os.path.join(missing_dir, f"{js_missing['name']}.json")
+                click.echo(f'Write:\t{path_missing}')
+                input.write(js_missing, path_missing)
+
+                # Add missing sequence to index
+                index[seq_type][ seq_fields['sequence'] ] = None
             else:
                 click.echo(f"Sequence not in data index: {seq_type}/{seq_fields['sequence']}")
                 raise
