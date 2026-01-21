@@ -33,6 +33,14 @@ def init(dialect='alphafold3', version=2, name=None, modelSeeds=[4], bondedAtomP
             ('userCCD', userCCD),
     ])
 
+def init_sequence(type, id, sequence):
+    return collections.OrderedDict([(
+        type, collections.OrderedDict([
+            ('id', id),
+            ('sequence', sequence)
+        ])
+    )])
+
 def enumerate_chains():
     for chain_id in map(lambda *args: ''.join(*args), itertools.chain(
         itertools.product(string.ascii_uppercase, repeat=1),
@@ -42,13 +50,9 @@ def enumerate_chains():
         yield chain_id
 
 def from_sequences(*sequences):
-    def _get_seq(id, seq):
-        return collections.OrderedDict([('protein', collections.OrderedDict([('id', id),('sequence', seq)]))])
-
     js = init()
     for sequence, chain_id in zip(sequences, enumerate_chains()):
-        js['sequences'].append(_get_seq(chain_id, sequence))
-
+        js['sequences'].append(init_sequence('protein', chain_id, sequence))
     return js
 
 def read(path):

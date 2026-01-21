@@ -1,15 +1,20 @@
 [project]
 name = "af3io"
-version = "0.5"
+version = "0.6-dev"
 description = "Utilities for AlphaFold 3 input/output files"
 readme = "README.md"
 authors = [
     { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
 ]
 requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+]
 dependencies = [
     "click",
     "humanfriendly",
+    "pandas",
 ]
 
 [project.scripts]

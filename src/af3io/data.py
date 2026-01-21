@@ -43,7 +43,7 @@ def lookup(js, index, missing_dir=None):
                 # Write monomer JSON for missing sequence
                 js_missing = input.init()
                 js_missing['name'] = input.sanitised_name(f'{js["name"]}_{seq_fields["id"]}')
-                js_missing['sequences'].append(collections.OrderedDict([(seq_type, collections.OrderedDict([('id', seq_fields['id']),('sequence', seq_fields['sequence'])]))]))
+                js_missing['sequences'].append(input.init_sequence(seq_type, seq_fields['id'], seq_fields['sequence']))
                 path_missing = os.path.join(missing_dir, f"{js_missing['name']}.json")
                 click.echo(f'Write:\t{path_missing}')
                 input.write(js_missing, path_missing)

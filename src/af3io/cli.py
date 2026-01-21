@@ -57,7 +57,7 @@ def input_create(version, model_seed, type, id, sequence, json_path):
         modelSeeds = [model_seed],
     )
     for type_, id_, sequence_ in zip(type, id, sequence):
-        js['sequences'].append(collections.OrderedDict([(type_, collections.OrderedDict([('id', id_),('sequence', sequence_)]))]))
+        js['sequences'].append(af3io.input.init_sequence(type_, id_, sequence_))
 
     click.echo(f'Write:\t{str(json_path.resolve())}')
     af3io.input.write(js=js, path=str(json_path.resolve()))
