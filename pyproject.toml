@@ -1,24 +1,29 @@
 [project]
 name = "af3io"
-version = "0.6-dev"
-description = "Utilities for AlphaFold 3 input/output files"
+version = "26.0-dev"
+description = "Collection of eclectic utilities for AlphaFold 3"
 readme = "README.md"
 authors = [
-    { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
+  { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
 ]
 requires-python = ">=3.10"
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "click",
-    "humanfriendly",
-    "pandas",
+  "click",
+  "humanfriendly",
+  "pandas",
 ]
 
 [project.scripts]
 af3io = "af3io.cli:cli"
+
+[project.urls]
+repository = "https://github.com/jurgjn/af3io"
+changelog = "https://github.com/jurgjn/af3io/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=61"]

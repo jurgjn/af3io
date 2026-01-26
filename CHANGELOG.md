@@ -1,9 +1,11 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+This project adheres to [Calendar Versioning](https://calver.org/).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [26.0] - Unreleased
+- Read inference output such as summary confidences from zip-compressed files
+- Use **YY.MINOR.MICRO**-style calendar versioning as af3io is an
+[amorphous set of utilities with research-driven scope](https://calver.org/#when-to-use-calver)
 
 ## [0.5] - 2026-01-21
 - Fix `data-fill` missing sequence identification to account for all sequences across all input JSONs

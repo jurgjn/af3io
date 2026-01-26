@@ -35,6 +35,11 @@ class Predictions:
         #print(f'Reading ranking_scores from:', self.ranking_scores_path)
         self.ranking_scores = pd.read_csv(self._read(self.ranking_scores_path), sep=',')
 
+        # Paths for top-ranked model/confidences
+        self.model_path               = f'{self.name}/{self.name}_model.cif'
+        self.summary_confidences_path = f'{self.name}/{self.name}_summary_confidences.json'
+        self.confidences_path         = f'{self.name}/{self.name}_confidences.json'
+
         # Add model/confidence paths as columns to self.ranking_scores
         if self._file_layout == 0:
             self.ranking_scores['model_path'] =               [ *map(lambda seed, sample: f'{self.name}/seed-{seed}_sample-{sample}/model.cif', self.ranking_scores['seed'], self.ranking_scores['sample'])]
@@ -46,6 +51,11 @@ class Predictions:
             self.ranking_scores['confidences_path'] =         [ *map(lambda seed, sample: f'{self.name}/seed-{seed}_sample-{sample}/{self.name}_seed-{seed}_sample-{sample}_confidences.json', self.ranking_scores['seed'], self.ranking_scores['sample'])]
         else:
             assert False
+
+    def open(self, file):
+        with zipfile.ZipFile(self.path) as fh_zip:
+            with fh_zip.open(file) as fh:
+                return fh
 
     def _read(self, file):
         with zipfile.ZipFile(self.path) as fh_zip:
@@ -72,3 +82,10 @@ def read_summary_confidences(path):
     # Wrapper to "just get the iptm scores"
     p = Predictions(path)
     return p.read_summary_confidences()
+
+def read_model(path):
+    # Wrapper to "just get the top model"
+    p = Predictions(path)
+    with zipfile.ZipFile(p.path) as fh_zip:
+        with fh_zip.open(p.model_path) as fh:
+            return fh.read().decode()
