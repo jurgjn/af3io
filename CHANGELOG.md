@@ -2,7 +2,7 @@
 
 This project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.0] - Unreleased
+## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output
 - Use **YY.MINOR.MICRO**-style calendar versioning as af3io is an
 [amorphous set of utilities with research-driven scope](https://calver.org/#when-to-use-calver)

@@ -1,7 +1,7 @@
 [project]
 name = "af3io"
-version = "26.0-dev"
-description = "Collection of eclectic utilities for AlphaFold 3"
+version = "26.0"
+description = "Eclectic utilities for AlphaFold 3"
 readme = "README.md"
 authors = [
   { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
