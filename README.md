@@ -1,5 +1,4 @@
-![PyPI - Version](https://img.shields.io/pypi/v/af3io)
-<a href="http://calver.org"><img src="https://img.shields.io/badge/calver-YY.MINOR.MICRO-22bfda.svg"></a>
+[![PyPI version](https://badge.fury.io/py/af3io.svg)](https://badge.fury.io/py/af3io)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/af3io)
 
 # af3io
