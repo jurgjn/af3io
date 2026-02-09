@@ -74,8 +74,10 @@ class Predictions:
         merge_ = pd.concat([
             self.ranking_scores,
             summary_confidences_.drop(['ranking_score'], axis=1), # drop ranking_score as the values in ranking_scores have more significant digits
-        ], axis=1)[['seed', 'sample', 'ranking_score', 'fraction_disordered', 'has_clash', 'iptm', 'ptm', 'chain_iptm', 'chain_pair_iptm', 'chain_pair_pae_min', 'chain_ptm']]
+        ], axis=1)[['seed', 'sample', 'ranking_score', 'fraction_disordered', 'has_clash', 'iptm', 'ptm', 'chain_iptm', 'chain_pair_iptm', 'chain_pair_pae_min', 'chain_ptm', 'summary_confidences_path']]
         merge_.insert(loc=0, column='name', value=self.name)
+        loc_ = len(merge_.columns) # Insert as last column
+        merge_.insert(loc=loc_, column='predictions_path', value=self.path)
         return merge_
 
 def read_summary_confidences(path):
