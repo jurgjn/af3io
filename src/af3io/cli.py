@@ -1,12 +1,14 @@
 
-import collections, contextlib, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile
+import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile
 from pathlib import Path
 from pprint import pprint
 
+import numpy as np
 import click
+
 import af3io
 
-@click.group(help='Utilities for AlphaFold 3 input/output files')
+@click.group(help='Eclectic utilities for AlphaFold 3')
 @click.version_option(package_name='af3io')
 def cli():
     pass
@@ -150,190 +152,126 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
             click.echo(f'Write:\t{output_json}')
             af3io.input.write(js, output_json)
 
+@cli.command(short_help='Compress a confidences JSON')
+@click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
+def confidences_compress(confidences_json):
+    """Compress a confidences JSON."""
+
+    confidences_compressed = confidences_json.with_suffix('.compressed.json')
+    confidences_contact_probs_png = confidences_json.with_suffix('.contact_probs.png')
+    confidences_pae_png = confidences_json.with_suffix('.pae.png')
+
+    js = af3io.confidences.read_confidences_json(confidences_json)
+
+    click.echo(f'Write: {confidences_compressed}')
+    confidences_str_ = af3io.confidences.dumps_json(
+        atom_chain_ids=af3io.confidences.compress_repeating(js['atom_chain_ids']),
+        atom_plddts=js['atom_plddts'],
+        contact_probs=str(confidences_contact_probs_png),
+        pae=str(confidences_pae_png),
+        token_chain_ids=af3io.confidences.compress_repeating(js['token_chain_ids']),
+        token_res_ids=af3io.confidences.compress_increasing(js['token_res_ids']),
+    )
+    with open(confidences_compressed, 'w') as fh:
+        fh.write(confidences_str_)
+
+    click.echo(f'Write: {confidences_contact_probs_png}')
+    af3io.confidences.save_contact_probs(confidences_contact_probs_png, js['contact_probs'])
+
+    click.echo(f'Write: {confidences_pae_png}')
+    af3io.confidences.save_pae(confidences_pae_png, js['pae'])
+
+@cli.command(short_help='Decompress a confidences JSON')
+@click.argument('compressed_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
+def confidences_decompress(compressed_json):
+    """Decompress a confidences JSON."""
+
+    confidences_compressed = compressed_json
+    confidences_contact_probs_png = compressed_json.with_suffix('').with_suffix('.contact_probs.png')
+    confidences_pae_png = compressed_json.with_suffix('').with_suffix('.pae.png')
+
+    click.echo(f'Read: {confidences_compressed}')
+    js_compressed = af3io.confidences.read_confidences_json(confidences_compressed)
+
+    click.echo(f'Read: {confidences_contact_probs_png}')
+    contact_probs = af3io.confidences.load_contact_probs(confidences_contact_probs_png)
+
+    click.echo(f'Read: {confidences_pae_png}')
+    pae = af3io.confidences.load_pae(confidences_pae_png)
+
+    confidences_decompressed = compressed_json.with_suffix('').with_suffix('.decompressed.json')
+    confidences_str_ = af3io.confidences.dumps_json(
+        atom_chain_ids=af3io.confidences_eval.decompress_repeating(js_compressed['atom_chain_ids']),
+        atom_plddts=js_compressed['atom_plddts'],
+        # Use round() to recapitulate significant digits as in: https://github.com/google-deepmind/alphafold3/blob/main/src/alphafold3/model/confidence_types.py#L36-L41
+        contact_probs=np.round(contact_probs, 2).tolist(),
+        pae=(np.round(pae, 1).tolist()),
+        token_chain_ids=af3io.confidences_eval.decompress_repeating(js_compressed['token_chain_ids']),
+        token_res_ids=af3io.confidences_eval.decompress_increasing(js_compressed['token_res_ids']),
+    )
+    click.echo(f'Write: {confidences_decompressed}')
+    with open(confidences_decompressed, 'w') as fh:
+        fh.write(confidences_str_)
+
+@cli.command(short_help='Show compact summary of a confidences JSON')
+@click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
+def confidences_show(confidences_json):
+    """Show a compact summary of a confidences JSON."""
+
+    js = af3io.confidences.read_confidences_json(confidences_json)
+
+    def describe_array(name, arr):
+        click.echo(f'{name} has shape {arr.shape}')
+
+        click.echo(f'{arr.min()} min')
+        click.echo(f'{arr.max()} max')
+        click.echo(f'{len(np.unique(arr)):,} unique values')
+
+        is_symmetric = (arr == arr.T).all()
+        no_symmetric = (arr == arr.T).sum()
+        no_elements = arr.shape[0] * arr.shape[1]
+        click.echo(f'{no_symmetric:,} of {no_elements:,} elements symmetric ({100*no_symmetric / no_elements:.1f}%)')
+        click.echo('')
+
+    describe_array('contact_probs', np.array(js['contact_probs']))
+    describe_array('pae', np.array(js['pae']))
+
 '''
-@cli.command(help='Compress AlphaFold3 predictions')
-@click.argument('path', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-@click.argument('compressed_file', type=click.Path(exists=False, file_okay=False, readable=False, path_type=Path))
-@click.option('--drop-data-pipeline', is_flag=True, default=True)
-@click.option('--confidences-as-pngs', is_flag=True, default=True)
-def predictions_compress(path, compressed_file, drop_data_pipeline, confidences_as_pngs):
-    path_prefix = path.resolve().parent # prefix to be stripped from all file names
-    #click.echo(f'path_prefix: {path_prefix}')
-    with zipfile.ZipFile(compressed_file, mode='x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for filename in path.resolve().rglob('*'):
-            arcname = os.path.relpath(filename.resolve(), path_prefix)
-            if filename.is_file():
-                if filename.name.endswith('_data.json') and drop_data_pipeline:
-                    click.echo(f'dropping: {arcname}')
-                elif filename.name.endswith('confidences.json') and not filename.name.endswith('summary_confidences.json') and confidences_as_pngs:
-                    compressed_json = Path(arcname).with_suffix('.compressed.json')
-                    contact_prob_png = Path(arcname).with_suffix('.contact_prob.png')
-                    pae_png = Path(arcname).with_suffix('.pae.png')
+    js_ref = copy.deepcopy(js)
 
-                    click.echo(f'encoding: {arcname}')
-                    t0 = time.perf_counter()
-                    confdata = confidences.read_confidences_json(filename)
-                    click.echo(f'    time: {time.perf_counter() - t0:.1f} sec')
+    atom_plddts_ = np.array(js['atom_plddts'])
+    contact_probs_ = np.array(js['contact_probs'])
 
-                    click.echo(f'      as: {compressed_json}')
-                    t0 = time.perf_counter()
-                    zf.writestr(zinfo_or_arcname=str(compressed_json), data=confidences.dumps_json(
-                        confidences.compress_repeating(confdata['atom_chain_ids']),
-                        confdata['atom_plddts'],
-                        None,
-                        None,
-                        confidences.compress_repeating(confdata['token_chain_ids']),
-                        confidences.compress_increasing(confdata['token_res_ids']),
-                    ))
-                    click.echo(f'    time: {time.perf_counter() - t0:.1f} sec')
+    af3io.confidences.save_pae(confidences_pae_png, js['pae'])
 
-                    click.echo(f'      as: {contact_prob_png}')
-                    t0 = time.perf_counter()
-                    zf.writestr(
-                        zinfo_or_arcname=str(contact_prob_png),
-                        data=confidences.dump_contact_probs(confdata['contact_probs']),
-                        compress_type=zipfile.ZIP_STORED,
-                    )
-                    click.echo(f'    time: {time.perf_counter() - t0:.1f} sec')
+    # Show summary
+    js['atom_chain_ids'] = af3io.confidences.compress_repeating(js['atom_chain_ids'])
+    js['atom_plddts'] = str(atom_plddts_.shape)
+    js['contact_probs'] = str(contact_probs_.shape)
+    js['pae'] = '<pae>'
+    #js['pae'] = str(pae_im_)
+    js['token_chain_ids'] = af3io.confidences.compress_repeating(js['token_chain_ids'])
+    js['token_res_ids'] = af3io.confidences.compress_increasing(js['token_res_ids'])
+    click.echo(json.dumps(js, indent=2))
 
-                    click.echo(f'      as: {pae_png}')
-                    t0 = time.perf_counter()
-                    zf.writestr(
-                        zinfo_or_arcname=str(pae_png),
-                        data=confidences.dump_pae(confdata['pae']),
-                        compress_type=zipfile.ZIP_STORED,
-                    )
-                    click.echo(f'    time: {time.perf_counter() - t0:.1f} sec')
+    # Sanity check pae
+    click.echo('pae:')
+    click.echo(af3io.confidences.load_pae(confidences_pae_png)[0])
+    click.echo(np.array(js_ref['pae'])[0])
 
-                else:
-                    click.echo(f'  adding: {arcname}')
-                    zf.write(filename=filename, arcname=arcname)
+    # Sanity checks on compression
+    if js_ref['atom_chain_ids'] == af3io.confidences_eval.decompress_repeating(js['atom_chain_ids']):
+        click.echo('match\tatom_chain_id')
+    else:
+        click.echo('mismatch\tatom_chain_id')
 
-@cli.command(help='Decompress AlphaFold3 predictions')
-@click.argument('compressed_file', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-@click.argument('exdir', default=None)
-def predictions_decompress(compressed_file, exdir):
-    click.echo(f'compressed_file: {compressed_file}')
-    click.echo(f'exdir: {exdir}')
+    if js_ref['token_chain_ids'] == af3io.confidences_eval.decompress_repeating(js['token_chain_ids']):
+        click.echo('match\ttoken_chain_id')
+    else:
+        click.echo('mismatch\ttoken_chain_id')
 
-    with zipfile.ZipFile(compressed_file) as zf:
-        for filename in zf.namelist():
-            if filename.endswith('confidences.compressed.json'):
-                contact_prob_png = filename.removesuffix('.compressed.json') + '.contact_prob.png'
-                pae_png = filename.removesuffix('.compressed.json') + '.pae.png'
-                filename_decompress = os.path.join(exdir, filename.removesuffix('.compressed.json') + '.json')
-
-                click.echo(f' decode: {filename} to: {filename_decompress}')
-                click.echo(f'   from: {contact_prob_png}')
-                click.echo(f'   from: {pae_png}')
-
-                with zf.open(filename) as fh:
-                    confdata = json.load(fh, object_pairs_hook=collections.OrderedDict)
-
-                os.makedirs(os.path.dirname(filename_decompress), exist_ok=True)
-                confidences.write_json(filename_decompress,
-                    confidences_eval.decompress_repeating(confdata['atom_chain_ids']),
-                    confdata['atom_plddts'],
-                    confidences.load_contact_probs(io.BytesIO(zf.read(contact_prob_png))).tolist(),
-                    #confidences.load_pae(io.BytesIO(zf.read(pae_png))).tolist(),
-                    confidences.load_pae(np.asarray(bytearray(zf.read(pae_png)), dtype=np.uint8)).tolist(),
-                    confidences_eval.decompress_repeating(confdata['token_chain_ids']),
-                    confidences_eval.decompress_increasing(confdata['token_res_ids']),
-                )
-
-            elif filename.endswith('.contact_prob.png') or filename.endswith('.pae.png'):
-                click.echo(f'   skip: {filename}')
-            else:
-                click.echo(f'extract: {filename}')
-                zf.extract(filename, path=exdir)
-
-@cli.command(help='Test compressed predictions against reference')
-@click.argument('compressed_file', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-@click.argument('test_path', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-def predictions_test(compressed_file, test_path):
-    click.echo(f'compressed_file: {compressed_file}')
-    click.echo(f'test_path: {test_path}')
-
-    with zipfile.ZipFile(compressed_file) as zf:
-        for filename in zf.namelist():
-            if Path(filename).is_file():
-                with zf.open(filename) as fh_zf:
-                    with open(filename) as fh_ref:
-                        read_zf = fh_zf.read().decode()
-                        read_ref = fh_ref.read()
-                        read_eq = read_zf == read_ref
-                        click.echo(f'{read_eq}\t{filename}\t{len(read_zf)}\t{len(read_ref)}')
-            elif filename.endswith('confidences.compressed.json'):
-                contact_prob_png = filename.removesuffix('.compressed.json') + '.contact_prob.png'
-                pae_png = filename.removesuffix('.compressed.json') + '.pae.png'
-                filename_ref = os.path.join(test_path, filename.removesuffix('.compressed.json') + '.json')
-                click.echo('confidences:')
-                click.echo(f'{filename}')
-                click.echo(f'{contact_prob_png}')
-                click.echo(f'{pae_png}')
-                click.echo(f'{filename_ref}')
-
-                with zf.open(filename) as fh:
-                    confdata_zf = json.load(fh, object_pairs_hook=collections.OrderedDict)
-
-                confdata_ref = confidences.read_confidences_json(filename_ref)
-                for k, v in confdata_ref.items():
-                    if k in {'atom_chain_ids', 'token_chain_ids',}:
-                        click.echo(f'{k}\t{confidences_eval.decompress_repeating(confdata_zf[k])==confdata_ref[k]}')
-                    elif k in {'token_res_ids',}:
-                        click.echo(f'{k}\t{confidences_eval.decompress_increasing(confdata_zf[k])==confdata_ref[k]}')
-                    elif k in {'atom_plddts',}:
-                        click.echo(f'{k}\t{confdata_zf[k]==confdata_ref[k]}')
-
-                    elif k == 'contact_probs':
-                        contact_probs_zf = confidences.load_contact_probs(io.BytesIO(zf.read(contact_prob_png)))
-                        n_equal = (contact_probs_zf == confdata_ref['contact_probs']).sum()
-                        click.echo(f'{k}: {n_equal} of {contact_probs_zf.size} elements equal')
-
-                    elif k == 'pae':
-                        #pae_zf = confidences.load_pae(io.BytesIO(zf.read(pae_png)))#.tolist()
-                        #pae_zf = confidences.load_pae(np.asarray(bytearray(zf.read(pae_png)), dtype=np.uint8))
-                        im_ = PIL.Image.open(io.BytesIO(zf.read(pae_png)))
-                        print('mode:', im_.mode)
-                        pae_zf = np.array(im_) / 256 / 10
-                        n_equal = (pae_zf == confdata_ref['pae']).sum()
-
-                        click.echo(f'{k}: {n_equal} of {pae_zf.size} elements equal')
-                        #print(pae_zf[0,0], pae_zf[0,1], pae_zf[0,2], pae_zf[0,3], pae_zf[0,4])
-                        #print(confdata_ref['pae'][0][0], confdata_ref['pae'][0][1], confdata_ref['pae'][0][2], confdata_ref['pae'][0][3], confdata_ref['pae'][0][4])
-
-                        mapping_ = set([
-                            (confdata_ref['pae'][ix][iy], float(pae_zf[ix, iy])) for ix, iy in np.ndindex(pae_zf.shape)
-                        ])
-                        click.echo(f'{len(mapping_)} unique mappings')
-                        for pair_ in sorted(mapping_):
-                            click.echo(f'    {pair_}')
-
-                        """
-                        print('eq:')
-                        count = 10
-                        for ix, iy in np.ndindex(pae_zf.shape):
-                            a = pae_zf[ix, iy]
-                            b = confdata_ref['pae'][ix][iy]
-                            if a == b:
-                                print(ix, iy, a, b)
-                                count -= 1
-                            if count <= 0:
-                                break
-
-                        print('neq:')
-                        count = 1000
-                        for ix, iy in np.ndindex(pae_zf.shape):
-                            a = pae_zf[ix, iy]
-                            b = confdata_ref['pae'][ix][iy]
-                            if a != b:
-                                print(ix, iy, a, b)
-                                count -= 1
-
-                            if count <= 0:
-                                exit()
-                        """
-                    else:
-                        click.echo(f'{k} unknown')
-                        assert False
+    if js_ref['token_res_ids'] == af3io.confidences_eval.decompress_increasing(js['token_res_ids']):
+        click.echo('match\ttoken_res_ids')
+    else:
+        click.echo('mismatch\ttoken_res_ids')
 '''
