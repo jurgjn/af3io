@@ -9,11 +9,13 @@ Compress A3 confidences .json
 
 Note confidences json encoding is customised:
     https://github.com/google-deepmind/alphafold3/blob/main/src/alphafold3/model/confidence_types.py
+
+https://github.com/strukturag/libheif/issues/562
 """
 
 import argparse, collections, collections.abc, copy, hashlib, itertools, gzip, json, os, os.path, re, string, subprocess, sys
 from pathlib import Path
-import numpy as np, PIL, PIL.Image
+import numpy as np, zarr
 
 def compress_increasing(a):
     ranges = []
@@ -24,47 +26,29 @@ def compress_increasing(a):
     return f'chain({",".join(ranges)})'
 
 def compress_repeating(l):
-    return 'chain(' + ','.join([f"repeat('{k}',{len(list(g))})" for k, g in itertools.groupby(l)]) + ')'
+    return '+'.join([f"['{k}']*{len(list(g))}" for k, g in itertools.groupby(l)])
 
 def compress_symm(arr):
-    #return arr
     return arr * np.tri(*arr.shape, k=0) #https://stackoverflow.com/questions/23839688/how-to-fill-upper-triangle-of-numpy-array-with-zeros-in-place
 
 def decompress_symm(arr):
-    #return arr
     return np.tril(arr) + np.triu(arr.T, 1)
-
-# https://pillow.readthedocs.io/en/stable/handbook/image-file-formats.html#png-saving
-def save_contact_probs(file, contact_probs):
-    contact_probs_np_ = compress_symm(np.array(contact_probs))
-    contact_probs_im_ = PIL.Image.fromarray((100*contact_probs_np_).round().astype(np.uint8))
-    contact_probs_im_.save(file)
-
-def save_pae(file, pae):
-    np_ = np.array(pae)
-    im_ = PIL.Image.fromarray((10*np_).round().astype(np.uint16))
-    im_.save(file)
-
-def load_contact_probs(file):
-    probs_ = 0.01 * np.array(PIL.Image.open(file))
-    return decompress_symm(probs_)
-
-def load_pae(file):
-    im_ = PIL.Image.open(file)
-    print(f'file: {file}, mode: {im_.mode}, palette: {im_.palette}')
-    np_ = 0.1 * np.array(im_)
-    print(f'{len(np.unique(np_)):,} unique values')
-    return np_
-
-def read_json(file):
-    with open(file) as fh:
-        conf = json.load(fh, object_pairs_hook=collections.OrderedDict)
-    return conf
 
 def read_confidences_json(file):
     with open(file) as fh:
         conf = json.load(fh)
     return conf
+
+def format_json(atom_chain_ids, atom_plddts, contact_probs, pae, token_chain_ids, token_res_ids):
+    json_str_ = f'''{{
+  "atom_chain_ids": {atom_chain_ids},
+  "atom_plddts": {atom_plddts},
+  "contact_probs": {contact_probs},
+  "pae": {pae},
+  "token_chain_ids": {token_chain_ids},
+  "token_res_ids": {token_res_ids}
+}}'''
+    return json_str_
 
 def dumps_json(atom_chain_ids, atom_plddts, contact_probs, pae, token_chain_ids, token_res_ids):
     atom_chain_ids_str = json.dumps(atom_chain_ids).replace(' ', '')

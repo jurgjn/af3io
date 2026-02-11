@@ -3,6 +3,7 @@ import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os
 from pathlib import Path
 from pprint import pprint
 
+import zarr
 import numpy as np
 import click
 
@@ -156,59 +157,58 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def confidences_compress(confidences_json):
     """Compress a confidences JSON."""
-
-    confidences_compressed = confidences_json.with_suffix('.compressed.json')
-    confidences_contact_probs_png = confidences_json.with_suffix('.contact_probs.png')
-    confidences_pae_png = confidences_json.with_suffix('.pae.png')
+    confidences_compressed = confidences_json.with_suffix('.zarr_compressed.zip')
 
     js = af3io.confidences.read_confidences_json(confidences_json)
 
-    click.echo(f'Write: {confidences_compressed}')
-    confidences_str_ = af3io.confidences.dumps_json(
-        atom_chain_ids=af3io.confidences.compress_repeating(js['atom_chain_ids']),
-        atom_plddts=js['atom_plddts'],
-        contact_probs=str(confidences_contact_probs_png),
-        pae=str(confidences_pae_png),
+    js_zarr = dict(
+        atom_chain_ids = af3io.confidences.compress_repeating(js['atom_chain_ids']),
+        atom_plddts = (100*np.array(js['atom_plddts'])).round().astype(np.uint16),
+        #contact_probs = (100*np.array(js['contact_probs'])).round().astype(np.uint8),
+        contact_probs = af3io.confidences.compress_symm((100*np.array(js['contact_probs'])).round().astype(np.uint8)),
+        pae = (10*np.array(js['pae'])).round().astype(np.uint16),
+        #pae = af3io.confidences.compress_symm((10*np.array(js['pae'])).round().astype(np.uint16)),
         token_chain_ids=af3io.confidences.compress_repeating(js['token_chain_ids']),
         token_res_ids=af3io.confidences.compress_increasing(js['token_res_ids']),
     )
-    with open(confidences_compressed, 'w') as fh:
-        fh.write(confidences_str_)
 
-    click.echo(f'Write: {confidences_contact_probs_png}')
-    af3io.confidences.save_contact_probs(confidences_contact_probs_png, js['contact_probs'])
+    store = zarr.storage.ZipStore(confidences_compressed, mode='w')
+    root = zarr.create_group(store=store)
 
-    click.echo(f'Write: {confidences_pae_png}')
-    af3io.confidences.save_pae(confidences_pae_png, js['pae'])
+    for name in ['atom_chain_ids', 'token_chain_ids', 'token_res_ids']:
+        root.attrs[name] = js_zarr[name]
+
+    for name in ['atom_plddts', 'contact_probs', 'pae']:
+        array_ = root.create_array(name=name,
+            shape=js_zarr[name].shape,
+            dtype=js_zarr[name].dtype,
+            compressors=zarr.codecs.BloscCodec(clevel=9)
+        )
+        if len(js_zarr[name].shape) == 1:
+            array_[:] = js_zarr[name]
+        else:
+            array_[:,:] = js_zarr[name]
+
+    store.close()
 
 @cli.command(short_help='Decompress a confidences JSON')
 @click.argument('compressed_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def confidences_decompress(compressed_json):
     """Decompress a confidences JSON."""
 
-    confidences_compressed = compressed_json
-    confidences_contact_probs_png = compressed_json.with_suffix('').with_suffix('.contact_probs.png')
-    confidences_pae_png = compressed_json.with_suffix('').with_suffix('.pae.png')
-
-    click.echo(f'Read: {confidences_compressed}')
-    js_compressed = af3io.confidences.read_confidences_json(confidences_compressed)
-
-    click.echo(f'Read: {confidences_contact_probs_png}')
-    contact_probs = af3io.confidences.load_contact_probs(confidences_contact_probs_png)
-
-    click.echo(f'Read: {confidences_pae_png}')
-    pae = af3io.confidences.load_pae(confidences_pae_png)
+    store = zarr.storage.ZipStore(compressed_json, read_only=True)
+    root = zarr.open_group(store=store, mode='r')
+    confidences_str_ = af3io.confidences.dumps_json(
+        atom_chain_ids = af3io.confidences_eval.decompress_repeating(root.attrs['atom_chain_ids']),
+        atom_plddts = np.round(0.01 * np.array(root['atom_plddts']), 2).tolist(),
+        #contact_probs = np.round(0.01 * np.array(root['contact_probs']), 2).tolist(),
+        contact_probs = af3io.confidences.decompress_symm(np.round(0.01 * np.array(root['contact_probs']), 2)).tolist(),
+        pae = np.round(0.1 * np.array(root['pae']), 1).tolist(),
+        token_chain_ids = af3io.confidences_eval.decompress_repeating(root.attrs['token_chain_ids']),
+        token_res_ids = af3io.confidences_eval.decompress_increasing(root.attrs['token_res_ids']),
+    )
 
     confidences_decompressed = compressed_json.with_suffix('').with_suffix('.decompressed.json')
-    confidences_str_ = af3io.confidences.dumps_json(
-        atom_chain_ids=af3io.confidences_eval.decompress_repeating(js_compressed['atom_chain_ids']),
-        atom_plddts=js_compressed['atom_plddts'],
-        # Use round() to recapitulate significant digits as in: https://github.com/google-deepmind/alphafold3/blob/main/src/alphafold3/model/confidence_types.py#L36-L41
-        contact_probs=np.round(contact_probs, 2).tolist(),
-        pae=(np.round(pae, 1).tolist()),
-        token_chain_ids=af3io.confidences_eval.decompress_repeating(js_compressed['token_chain_ids']),
-        token_res_ids=af3io.confidences_eval.decompress_increasing(js_compressed['token_res_ids']),
-    )
     click.echo(f'Write: {confidences_decompressed}')
     with open(confidences_decompressed, 'w') as fh:
         fh.write(confidences_str_)
@@ -220,58 +220,26 @@ def confidences_show(confidences_json):
 
     js = af3io.confidences.read_confidences_json(confidences_json)
 
-    def describe_array(name, arr):
-        click.echo(f'{name} has shape {arr.shape}')
+    def array_str_(arr):
+        array_ = np.array(arr)
+        min_ = array_.min()
+        max_ = array_.max()
+        nunique_ = len(np.unique(arr))
 
-        click.echo(f'{arr.min()} min')
-        click.echo(f'{arr.max()} max')
-        click.echo(f'{len(np.unique(arr)):,} unique values')
+        if len(array_.shape) == 2:
+            no_symmetric = (array_ == array_.T).sum()
+            no_elements = array_.shape[0] * array_.shape[1]
+            symmetric_ = f' / {no_symmetric:,} of {no_elements:,} symmetric ({100*no_symmetric / no_elements:.1f}%)'
+        else:
+            symmetric_ = ''
 
-        is_symmetric = (arr == arr.T).all()
-        no_symmetric = (arr == arr.T).sum()
-        no_elements = arr.shape[0] * arr.shape[1]
-        click.echo(f'{no_symmetric:,} of {no_elements:,} elements symmetric ({100*no_symmetric / no_elements:.1f}%)')
-        click.echo('')
+        return f'<shape: {array_.shape} / min: {min_} / max: {max_} / nunique: {nunique_:,}{symmetric_}>'
 
-    describe_array('contact_probs', np.array(js['contact_probs']))
-    describe_array('pae', np.array(js['pae']))
-
-'''
-    js_ref = copy.deepcopy(js)
-
-    atom_plddts_ = np.array(js['atom_plddts'])
-    contact_probs_ = np.array(js['contact_probs'])
-
-    af3io.confidences.save_pae(confidences_pae_png, js['pae'])
-
-    # Show summary
-    js['atom_chain_ids'] = af3io.confidences.compress_repeating(js['atom_chain_ids'])
-    js['atom_plddts'] = str(atom_plddts_.shape)
-    js['contact_probs'] = str(contact_probs_.shape)
-    js['pae'] = '<pae>'
-    #js['pae'] = str(pae_im_)
-    js['token_chain_ids'] = af3io.confidences.compress_repeating(js['token_chain_ids'])
-    js['token_res_ids'] = af3io.confidences.compress_increasing(js['token_res_ids'])
-    click.echo(json.dumps(js, indent=2))
-
-    # Sanity check pae
-    click.echo('pae:')
-    click.echo(af3io.confidences.load_pae(confidences_pae_png)[0])
-    click.echo(np.array(js_ref['pae'])[0])
-
-    # Sanity checks on compression
-    if js_ref['atom_chain_ids'] == af3io.confidences_eval.decompress_repeating(js['atom_chain_ids']):
-        click.echo('match\tatom_chain_id')
-    else:
-        click.echo('mismatch\tatom_chain_id')
-
-    if js_ref['token_chain_ids'] == af3io.confidences_eval.decompress_repeating(js['token_chain_ids']):
-        click.echo('match\ttoken_chain_id')
-    else:
-        click.echo('mismatch\ttoken_chain_id')
-
-    if js_ref['token_res_ids'] == af3io.confidences_eval.decompress_increasing(js['token_res_ids']):
-        click.echo('match\ttoken_res_ids')
-    else:
-        click.echo('mismatch\ttoken_res_ids')
-'''
+    click.echo(af3io.confidences.format_json(
+        atom_chain_ids = af3io.confidences.compress_repeating(js['atom_chain_ids']),
+        atom_plddts = array_str_(js['atom_plddts']),
+        contact_probs = array_str_(js['contact_probs']),
+        pae = array_str_(js['pae']),
+        token_chain_ids = af3io.confidences.compress_repeating(js['token_chain_ids']),
+        token_res_ids = af3io.confidences.compress_increasing(js['token_res_ids']),
+    ))

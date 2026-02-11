@@ -16,7 +16,7 @@ dependencies = [
   "click",
   "humanfriendly",
   "pandas",
-  "pillow",
+  "zarr",
 ]
 
 [project.scripts]
