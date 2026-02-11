@@ -6,6 +6,7 @@ from pprint import pprint
 import zarr
 import numpy as np
 import click
+#import numcodecs, numcodecs.pcodec
 
 import af3io
 
@@ -182,7 +183,8 @@ def confidences_compress(confidences_json):
         array_ = root.create_array(name=name,
             shape=js_zarr[name].shape,
             dtype=js_zarr[name].dtype,
-            compressors=zarr.codecs.BloscCodec(clevel=9)
+            compressors=zarr.codecs.BloscCodec(clevel=9),
+            #compressors=(numcodecs.PCodec(level=9),), #https://github.com/zarr-developers/zarr-python/issues/2964#issuecomment-2967323248
         )
         if len(js_zarr[name].shape) == 1:
             array_[:] = js_zarr[name]
