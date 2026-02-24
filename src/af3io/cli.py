@@ -7,6 +7,7 @@ import zarr
 import numpy as np
 import click
 #import numcodecs, numcodecs.pcodec
+#import numcodecs.zarr3
 
 import af3io
 
@@ -158,10 +159,15 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def confidences_compress(confidences_json):
     """Compress a confidences JSON."""
-    confidences_compressed = confidences_json.with_suffix('.zarr_compressed.zip')
+
+    # Compress from <name>.json to <name>.json.af3io
+    confidences_compressed = confidences_json.with_suffix(confidences_json.suffix + '.af3io')
 
     js = af3io.confidences.read_confidences_json(confidences_json)
 
+    # Preprocessing:
+    # - atom_plddts, contact_probs, pae: discretise by converting to numpy uint8/16 to fit min/max
+    # - atom_chain_ids, token_chain_ids, token_res_ids: encode as (much shorter) python expressions that can be "restored" with eval()
     js_zarr = dict(
         atom_chain_ids = af3io.confidences.compress_repeating(js['atom_chain_ids']),
         atom_plddts = (100*np.array(js['atom_plddts'])).round().astype(np.uint16),
@@ -173,18 +179,22 @@ def confidences_compress(confidences_json):
         token_res_ids=af3io.confidences.compress_increasing(js['token_res_ids']),
     )
 
+    # Store as a single compressed file using zarr ZipStore
     store = zarr.storage.ZipStore(confidences_compressed, mode='w')
     root = zarr.create_group(store=store)
 
+    # atom_plddts, contact_probs, pae: store as attributes
     for name in ['atom_chain_ids', 'token_chain_ids', 'token_res_ids']:
         root.attrs[name] = js_zarr[name]
 
+    # atom_plddts, contact_probs, pae: compress with Blosc (PCodec?)
     for name in ['atom_plddts', 'contact_probs', 'pae']:
         array_ = root.create_array(name=name,
             shape=js_zarr[name].shape,
             dtype=js_zarr[name].dtype,
             compressors=zarr.codecs.BloscCodec(clevel=9),
             #compressors=(numcodecs.PCodec(level=9),), #https://github.com/zarr-developers/zarr-python/issues/2964#issuecomment-2967323248
+            #serializer=zarr.codecs.numcodecs.PCodec(level=12), #https://numcodecs.readthedocs.io/en/v0.15.1/compression/pcodec.html
         )
         if len(js_zarr[name].shape) == 1:
             array_[:] = js_zarr[name]
@@ -192,6 +202,12 @@ def confidences_compress(confidences_json):
             array_[:,:] = js_zarr[name]
 
     store.close()
+
+    #pools_5k_0040f80/pools_5k_0040f80_confidences.json :  4.45%   (234068369 => 10407605 bytes, pools_5k_0040f80/pools_5k_0040f80_confidences.json.zst)
+    source_bytes = os.path.getsize(confidences_json)
+    target_bytes = os.path.getsize(confidences_compressed)
+    frac_compressed = 100 * target_bytes / source_bytes
+    click.echo(f'{confidences_json} : {frac_compressed:.2f}% ({source_bytes} => {target_bytes} bytes, {confidences_compressed})')
 
 @cli.command(short_help='Decompress a confidences JSON')
 @click.argument('compressed_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
@@ -210,10 +226,23 @@ def confidences_decompress(compressed_json):
         token_res_ids = af3io.confidences_eval.decompress_increasing(root.attrs['token_res_ids']),
     )
 
-    confidences_decompressed = compressed_json.with_suffix('').with_suffix('.decompressed.json')
-    click.echo(f'Write: {confidences_decompressed}')
+    # By default, decompress from <name>.json.af3io to <name>.json
+    suffixes_ = compressed_json.suffixes
+    assert suffixes_[-1] == '.af3io'
+    assert suffixes_[-2] == '.json'
+    confidences_decompressed = compressed_json.with_suffix('')
+
+    # If <name>.json exists, decompress to <name>.json.decompressed instead
+    confidences_decompressed_alt = compressed_json.with_suffix('.decompressed')
+    if confidences_decompressed.is_file():
+        click.echo(f'{confidences_decompressed} exists, writing to {confidences_decompressed_alt}')
+        confidences_decompressed = confidences_decompressed_alt
+
+    # Write decompressed contents
     with open(confidences_decompressed, 'w') as fh:
         fh.write(confidences_str_)
+    source_bytes = os.path.getsize(compressed_json)
+    click.echo(f'{compressed_json} : {source_bytes} bytes decompressed to {confidences_decompressed}')
 
 @cli.command(short_help='Show compact summary of a confidences JSON')
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))

@@ -1,16 +1,13 @@
-
 """
-Compress A3 confidences .json
+Compress confidences JSONs
+- `atom_plddts` ranges from 0 to 100 with two significant digits
+- `contact_probs` ranges from 0 to 1, two digits
+- `pae` ranges from 0 to 99.9, one digit
 
-- extract & store the two large matrices as .png-s (via oxipng)
-    - contact_probs ranges from 0 to 1, two digits
-    - pae ranges from 0 to 99.9, one digit:
-    - both seem? symmetric?
-
-Note confidences json encoding is customised:
-    https://github.com/google-deepmind/alphafold3/blob/main/src/alphafold3/model/confidence_types.py
-
-https://github.com/strukturag/libheif/issues/562
+Notes:
+- [contact_probs seems symmetric, pae somewhat symmetric](https://github.com/google-deepmind/alphafold3/issues/619)
+- confidences JSON output uses the standard `json` module [with post-processing](https://github.com/google-deepmind/alphafold3/blob/main/src/alphafold3/model/confidence_types.py)
+- `token_chain_ids` and `atom_chain_ids` [don't always use the same set of identifiers](https://github.com/google-deepmind/alphafold3/issues/271)
 """
 
 import argparse, collections, collections.abc, copy, hashlib, itertools, gzip, json, os, os.path, re, string, subprocess, sys

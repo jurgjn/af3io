@@ -1,5 +1,6 @@
+[![CI](https://github.com/jurgjn/af3io/actions/workflows/python-package.yml/badge.svg)](https://github.com/jurgjn/af3io/actions/workflows/python-package.yml)
 [![PyPI version](https://badge.fury.io/py/af3io.svg)](https://badge.fury.io/py/af3io)
-![PyPI - Downloads](https://img.shields.io/pypi/dm/af3io)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jurgjn/af3io)
 
 # af3io
 Collection of eclectic utilities for AlphaFold 3:
