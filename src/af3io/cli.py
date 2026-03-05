@@ -1,17 +1,11 @@
 
-import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile
+import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile, warnings
+import click, numpy as np, zarr
+import af3io
 from pathlib import Path
 from pprint import pprint
 
-import zarr
-import numpy as np
-import click
-#import numcodecs, numcodecs.pcodec
-#import numcodecs.zarr3
-
-import af3io
-
-@click.group(help='Eclectic utilities for AlphaFold 3')
+@click.group(help='Eclectic utilities for AlphaFold3')
 @click.version_option(package_name='af3io')
 def cli():
     pass
@@ -38,7 +32,7 @@ def input_create(version, model_seed, type, id, sequence, json_path):
     line arguments.
 
     The name field is inferred from json_path and checked for compatibility with
-    AlphaFold 3 (alphanumeric lower case and -._).
+    AlphaFold3 (alphanumeric lower case and -._).
     """
 
     # Check name attribute
@@ -90,7 +84,7 @@ def input_create(version, model_seed, type, id, sequence, json_path):
 def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_dir):
     """Read an input JSON, fill in data pipeline strings from matching sequences
     found in files under --data_dir. Files produced under --output_dir can then
-    be used as input for AlphaFold 3 inference, skipping the data pipeline step.
+    be used as input for AlphaFold3 inference, skipping the data pipeline step.
 
     Files under --data_dir can be either plain JSON (_data.json) or compressed
     with gzip (_data.json.gz). Can specify --data_dir multiple times.
@@ -106,7 +100,7 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
 
     If (some) sequences do not have data pipeline output, use --missing_dir to
     generate input JSON files, one per missing sequence. These can then be used
-    as input for the AlphaFold 3 data pipeline. The data pipeline output can
+    as input for the AlphaFold3 data pipeline. The data pipeline output can
     then be added as an additional --data_dir argument.
     """
 
@@ -164,44 +158,29 @@ def confidences_compress(confidences_json):
     confidences_compressed = confidences_json.with_suffix(confidences_json.suffix + '.af3io')
 
     js = af3io.confidences.read_confidences_json(confidences_json)
-
-    # Preprocessing:
-    # - atom_plddts, contact_probs, pae: discretise by converting to numpy uint8/16 to fit min/max
-    # - atom_chain_ids, token_chain_ids, token_res_ids: encode as (much shorter) python expressions that can be "restored" with eval()
-    js_zarr = dict(
-        atom_chain_ids = af3io.confidences.compress_repeating(js['atom_chain_ids']),
-        atom_plddts = (100*np.array(js['atom_plddts'])).round().astype(np.uint16),
-        #contact_probs = (100*np.array(js['contact_probs'])).round().astype(np.uint8),
-        contact_probs = af3io.confidences.compress_symm((100*np.array(js['contact_probs'])).round().astype(np.uint8)),
-        pae = (10*np.array(js['pae'])).round().astype(np.uint16),
-        #pae = af3io.confidences.compress_symm((10*np.array(js['pae'])).round().astype(np.uint16)),
-        token_chain_ids=af3io.confidences.compress_repeating(js['token_chain_ids']),
-        token_res_ids=af3io.confidences.compress_increasing(js['token_res_ids']),
-    )
+    js_encode = af3io.confidences.json_encode(js)
 
     # Store as a single compressed file using zarr ZipStore
-    store = zarr.storage.ZipStore(confidences_compressed, mode='w')
-    root = zarr.create_group(store=store)
+    with zarr.storage.ZipStore(confidences_compressed, mode='w') as store:
+        root = zarr.create_group(store=store)
 
-    # atom_plddts, contact_probs, pae: store as attributes
-    for name in ['atom_chain_ids', 'token_chain_ids', 'token_res_ids']:
-        root.attrs[name] = js_zarr[name]
+        with warnings.catch_warnings(): # Suppress seemingly harmless `UserWarning: Duplicate name: 'zarr.json'`
+            warnings.simplefilter('ignore')
+            # atom_plddts, contact_probs, pae: store as attributes
+            for name in ['atom_chain_ids', 'token_chain_ids', 'token_res_ids']:
+                root.attrs[name] = js_encode[name]
 
-    # atom_plddts, contact_probs, pae: compress with Blosc (PCodec?)
-    for name in ['atom_plddts', 'contact_probs', 'pae']:
-        array_ = root.create_array(name=name,
-            shape=js_zarr[name].shape,
-            dtype=js_zarr[name].dtype,
-            compressors=zarr.codecs.BloscCodec(clevel=9),
-            #compressors=(numcodecs.PCodec(level=9),), #https://github.com/zarr-developers/zarr-python/issues/2964#issuecomment-2967323248
-            #serializer=zarr.codecs.numcodecs.PCodec(level=12), #https://numcodecs.readthedocs.io/en/v0.15.1/compression/pcodec.html
-        )
-        if len(js_zarr[name].shape) == 1:
-            array_[:] = js_zarr[name]
-        else:
-            array_[:,:] = js_zarr[name]
-
-    store.close()
+        # atom_plddts, contact_probs, pae: compress with Blosc (PCodec?)
+        for name in ['atom_plddts', 'contact_probs', 'pae']:
+            array_ = root.create_array(name=name,
+                shape=js_encode[name].shape,
+                dtype=js_encode[name].dtype,
+                compressors=zarr.codecs.BloscCodec(clevel=9),
+            )
+            if len(js_encode[name].shape) == 1:
+                array_[:] = js_encode[name]
+            else:
+                array_[:,:] = js_encode[name]
 
     #pools_5k_0040f80/pools_5k_0040f80_confidences.json :  4.45%   (234068369 => 10407605 bytes, pools_5k_0040f80/pools_5k_0040f80_confidences.json.zst)
     source_bytes = os.path.getsize(confidences_json)
@@ -214,17 +193,16 @@ def confidences_compress(confidences_json):
 def confidences_decompress(compressed_json):
     """Decompress a confidences JSON."""
 
-    store = zarr.storage.ZipStore(compressed_json, read_only=True)
-    root = zarr.open_group(store=store, mode='r')
-    confidences_str_ = af3io.confidences.dumps_json(
-        atom_chain_ids = af3io.confidences_eval.decompress_repeating(root.attrs['atom_chain_ids']),
-        atom_plddts = np.round(0.01 * np.array(root['atom_plddts']), 2).tolist(),
-        #contact_probs = np.round(0.01 * np.array(root['contact_probs']), 2).tolist(),
-        contact_probs = af3io.confidences.decompress_symm(np.round(0.01 * np.array(root['contact_probs']), 2)).tolist(),
-        pae = np.round(0.1 * np.array(root['pae']), 1).tolist(),
-        token_chain_ids = af3io.confidences_eval.decompress_repeating(root.attrs['token_chain_ids']),
-        token_res_ids = af3io.confidences_eval.decompress_increasing(root.attrs['token_res_ids']),
-    )
+    with zarr.storage.ZipStore(compressed_json, read_only=True) as store:
+        root = zarr.open_group(store=store, mode='r')
+        confidences_str_ = af3io.confidences.dumps_json(
+            atom_chain_ids = af3io.confidences_eval.repeating_decode(root.attrs['atom_chain_ids']),
+            atom_plddts = af3io.confidences.decimal_decode(root['atom_plddts'], 2),
+            contact_probs = af3io.confidences.decimal_decode(af3io.confidences.symm_decode(root['contact_probs']), 2),
+            pae = af3io.confidences.decimal_decode(root['pae'], 1),
+            token_chain_ids = af3io.confidences_eval.repeating_decode(root.attrs['token_chain_ids']),
+            token_res_ids = af3io.confidences_eval.increasing_decode(root.attrs['token_res_ids']),
+        )
 
     # By default, decompress from <name>.json.af3io to <name>.json
     suffixes_ = compressed_json.suffixes
@@ -267,10 +245,10 @@ def confidences_show(confidences_json):
         return f'<shape: {array_.shape} / min: {min_} / max: {max_} / nunique: {nunique_:,}{symmetric_}>'
 
     click.echo(af3io.confidences.format_json(
-        atom_chain_ids = af3io.confidences.compress_repeating(js['atom_chain_ids']),
+        atom_chain_ids = af3io.confidences.repeating_encode(js['atom_chain_ids']),
         atom_plddts = array_str_(js['atom_plddts']),
         contact_probs = array_str_(js['contact_probs']),
         pae = array_str_(js['pae']),
-        token_chain_ids = af3io.confidences.compress_repeating(js['token_chain_ids']),
-        token_res_ids = af3io.confidences.compress_increasing(js['token_res_ids']),
+        token_chain_ids = af3io.confidences.repeating_encode(js['token_chain_ids']),
+        token_res_ids = af3io.confidences.increasing_encode(js['token_res_ids']),
     ))
