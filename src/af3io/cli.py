@@ -149,6 +149,23 @@ def data_fill(write_index, data_dir, json_path, input_dir, output_dir, missing_d
             click.echo(f'Write:\t{output_json}')
             af3io.input.write(js, output_json)
 
+@cli.command(short_help='Extract MSA/templates from data JSON to separate files')
+@click.argument('json_path', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
+def data_dump(json_path):
+    """Extract MSA/templates from data JSON to separate files.
+    Output files will be named according to the input file:
+    {json_path}_{id}_{pairedMsa}.a3m
+    {json_path}_{id}_{unpairedMsa}.a3m
+    """
+    js = af3io.input.read(json_path)
+    for seq_type, seq_fields in af3io.input.iter_sequences(js):
+
+        for field in ['unpairedMsa', 'pairedMsa']:
+            path_a3m = json_path.with_name(f"{json_path.stem}_{seq_fields['id']}_{field}.a3m")
+            with open(path_a3m, 'w') as fh:
+                fh.write(seq_fields[field])
+            click.echo(f"{path_a3m}: wrote {len(seq_fields[field])} bytes")
+
 @cli.command(short_help='Compress a confidences JSON')
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def confidences_compress(confidences_json):
