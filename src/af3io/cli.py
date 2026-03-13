@@ -1,6 +1,6 @@
 
 import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile, warnings
-import click, numpy as np, zarr
+import click, humanfriendly, numpy as np, zarr
 import af3io
 from pathlib import Path
 from pprint import pprint
@@ -164,7 +164,14 @@ def data_dump(json_path):
             path_a3m = json_path.with_name(f"{json_path.stem}_{seq_fields['id']}_{field}.a3m")
             with open(path_a3m, 'w') as fh:
                 fh.write(seq_fields[field])
-            click.echo(f"{path_a3m}: wrote {len(seq_fields[field])} bytes")
+            click.echo(f"{path_a3m}: {humanfriendly.format_size(len(seq_fields[field]))}")
+
+        for template in seq_fields['templates']:
+            name_cif = template['mmcif'].split()[0].removeprefix('data_')
+            path_cif = json_path.with_name(f"{json_path.stem}_{seq_fields['id']}_templates_{name_cif}.cif")
+            with open(path_cif, 'w') as fh:
+                fh.write(template['mmcif'])
+            click.echo(f"{path_cif}: wrote {humanfriendly.format_size(len(template['mmcif']))}")
 
 @cli.command(short_help='Compress a confidences JSON')
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
