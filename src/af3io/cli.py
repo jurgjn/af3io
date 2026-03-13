@@ -166,12 +166,14 @@ def data_dump(json_path):
                 fh.write(seq_fields[field])
             click.echo(f"{path_a3m}: {humanfriendly.format_size(len(seq_fields[field]))}")
 
-        for template in seq_fields['templates']:
+        for index, template in enumerate(seq_fields['templates']):
             name_cif = template['mmcif'].split()[0].removeprefix('data_')
-            path_cif = json_path.with_name(f"{json_path.stem}_{seq_fields['id']}_templates_{name_cif}.cif")
+            path_cif = json_path.with_name(f"{json_path.stem}_{seq_fields['id']}_templates_{index}_{name_cif}.cif")
             with open(path_cif, 'w') as fh:
                 fh.write(template['mmcif'])
-            click.echo(f"{path_cif}: wrote {humanfriendly.format_size(len(template['mmcif']))}")
+            click.echo(f"{path_cif}:\twrote {humanfriendly.format_size(len(template['mmcif']))}")
+            click.echo(f"queryIndices:\t{template['queryIndices']}")
+            click.echo(f"templateIndices:\t{template['templateIndices']}")
 
 @cli.command(short_help='Compress a confidences JSON')
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
