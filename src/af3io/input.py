@@ -98,7 +98,7 @@ def write(js, path):
 
     # Infer name attribute from path
     basename = os.path.basename(path).removesuffix('.json')
-    if not(basename.startswith(js['name'])):
+    if (js['name'] is None) or not(basename.startswith(js['name'])):
         js['name'] = basename
         print(f'Inferring name attribute {js["name"]} from path - {path}')
 
@@ -122,17 +122,14 @@ def sanitised_name(s):
         return c.islower() or c.isnumeric() or c in set('-._')
     return ''.join(filter(is_allowed, s.strip().lower().replace(' ', '_')))
 
-'''
-def count_tokens(path):
+def count_tokens(js):
     """Count tokens
     TODO: proteins only, no nucleic acids, no ligands, no PTMs...
     """
-    sequences = read_input_json(path)['sequences']
     n_tokens = 0
-    for seq in sequences:
+    for seq in js['sequences']:
         if 'protein' in seq:
             n_chains = len(seq['protein']['id'])
             seq_len = len(seq['protein']['sequence'])
             n_tokens += n_chains * seq_len
     return n_tokens
-'''
