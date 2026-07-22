@@ -1,4 +1,3 @@
-
 import argparse, collections, copy, glob, gzip, itertools, json, os, re, string, sys
 from pathlib import Path
 from pprint import pprint
@@ -25,7 +24,7 @@ def create_index(path):
             for seq_type, seq_fields in input.iter_sequences(input.read(str(path.resolve()))):
                 if not(seq_type in index.keys()):
                     index[seq_type] = dict()
-                if not(seq_fields['sequence'] in index[seq_type].keys()):
+                if 'sequence' in seq_fields:
                     index[seq_type][ seq_fields['sequence'] ] = str(path.resolve())
     return index
 
@@ -36,8 +35,11 @@ def lookup(js, index, missing_dir=None):
     """
     js = copy.deepcopy(js)
     for seq_type, seq_fields in input.iter_sequences(js):
+        if 'sequence' not in seq_fields:
+            continue
         try:
-            seq_fields['dataPath'] = index[ seq_type ][ seq_fields['sequence'] ]
+            index_type = index.get(seq_type, {})
+            seq_fields['dataPath'] = index_type[ seq_fields['sequence'] ]
         except KeyError:
             if (missing_dir is not None):
                 # Write monomer JSON for missing sequence
@@ -49,6 +51,8 @@ def lookup(js, index, missing_dir=None):
                 input.write(js_missing, path_missing)
 
                 # Add missing sequence to index
+                if seq_type not in index:
+                    index[seq_type] = {}
                 index[seq_type][ seq_fields['sequence'] ] = None
             else:
                 click.echo(f"Sequence not in data index: {seq_type}/{seq_fields['sequence']}")
@@ -59,8 +63,10 @@ def lookup(js, index, missing_dir=None):
 def fill(js):
     js = copy.deepcopy(js)
     for seq_type, seq_fields in input.iter_sequences(js):
+        if 'sequence' not in seq_fields or 'dataPath' not in seq_fields:
+            continue
         for seq_type_fill, seq_fields_fill in input.iter_sequences(input.read(seq_fields['dataPath'])):
-            if seq_type == seq_type_fill and seq_fields['sequence'] == seq_fields_fill['sequence']:
+            if seq_type == seq_type_fill and seq_fields['sequence'] == seq_fields_fill.get('sequence'):
                 click.echo(f'\tfill id={seq_fields["id"]} from id={seq_fields_fill["id"]} in {seq_fields["dataPath"]}')
                 seq_fields['modifications'] = []
                 seq_fields['unpairedMsa'] = seq_fields_fill['unpairedMsa']
@@ -80,18 +86,3 @@ def fill(js):
         js.move_to_end(field)
 
     return js
-
-'''
-def eprint(*args, **kwargs):
-    # https://stackoverflow.com/questions/5574702/how-do-i-print-to-stderr-in-python
-    print(*args, file=sys.stderr, **kwargs)
-
-def main():
-    if sys.stdin.isatty():
-        eprint('No input detected, exiting')
-        sys.exit(0)
-
-    js = input_json.read(sys.stdin)
-    js = fill(js)
-    sys.stdout.write(input_json.dumps(js))
-'''
