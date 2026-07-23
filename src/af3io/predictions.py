@@ -106,9 +106,14 @@ def _get_scores(pred, confidences_path):
     contact_probs = np.array(js['contact_probs'])
     pae = np.array(js['pae'])
 
+    adhoc5 = contact_probs * np.exp(-np.maximum(pae, pae.T) / 5)
+    adhoc8 = contact_probs * np.exp(-np.maximum(pae, pae.T) / 8)
+
     scores = (
         min_by_grouping(pae, chain_ids), # chain_pair_pae_min_recap
         max_by_grouping(contact_probs, chain_ids), # chain_pair_contact_probs_max
+        #max_by_grouping(adhoc5, chain_ids), # chain_pair_adhoc5
+        #max_by_grouping(adhoc8, chain_ids), # chain_pair_adhoc8
     )
     return scores
 
@@ -116,6 +121,9 @@ def read_summary_scores(path):
     pred = Predictions(path)
     scores = pred.read_summary_confidences()
     scores[['chain_pair_pae_min_recap', 'chain_pair_contact_probs_max']] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
+    scores = scores.astype({'predictions_path': str})
+    for col_ in ['chain_pair_pae_min_recap', 'chain_pair_contact_probs_max']:
+        scores[ col_ ] = scores[ col_ ].apply(np.ndarray.tolist)
     return scores
 
 def read_model(path):
