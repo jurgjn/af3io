@@ -1,9 +1,21 @@
 
-import functools, glob, gzip, itertools, io, json, math, os, re, zipfile
+import contextlib, functools, glob, gzip, itertools, io, json, math, os, re, zipfile
 from pprint import pprint
 from pathlib import Path
 
-import pandas as pd
+import numpy as np, pandas as pd
+
+def max_by_grouping(arr, grouping):
+    grouping_unique = list(map(str, dict.fromkeys(grouping)))
+    row_max = np.stack([arr[grouping == group].max(axis=0) for group in grouping_unique])
+    grp_max = np.stack([row_max[:, grouping == group].max(axis=1) for group in grouping_unique], axis=1)
+    return grp_max
+
+def min_by_grouping(arr, grouping):
+    grouping_unique = list(map(str, dict.fromkeys(grouping)))
+    row_min = np.stack([arr[grouping == group].min(axis=0) for group in grouping_unique])
+    grp_min = np.stack([row_min[:, grouping == group].min(axis=1) for group in grouping_unique], axis=1)
+    return grp_min
 
 class Predictions:
     """
@@ -52,10 +64,11 @@ class Predictions:
         else:
             assert False
 
+    @contextlib.contextmanager
     def open(self, file):
         with zipfile.ZipFile(self.path) as fh_zip:
             with fh_zip.open(file) as fh:
-                return fh
+                yield fh
 
     def _read(self, file):
         with zipfile.ZipFile(self.path) as fh_zip:
@@ -74,7 +87,7 @@ class Predictions:
         merge_ = pd.concat([
             self.ranking_scores,
             summary_confidences_.drop(['ranking_score'], axis=1), # drop ranking_score as the values in ranking_scores have more significant digits
-        ], axis=1)[['seed', 'sample', 'ranking_score', 'fraction_disordered', 'has_clash', 'iptm', 'ptm', 'chain_iptm', 'chain_pair_iptm', 'chain_pair_pae_min', 'chain_ptm', 'summary_confidences_path']]
+        ], axis=1)[['seed', 'sample', 'ranking_score', 'fraction_disordered', 'has_clash', 'iptm', 'ptm', 'chain_iptm', 'chain_pair_iptm', 'chain_pair_pae_min', 'chain_ptm', 'model_path', 'summary_confidences_path', 'confidences_path']]
         merge_.insert(loc=0, column='name', value=self.name)
         loc_ = len(merge_.columns) # Insert as last column
         merge_.insert(loc=loc_, column='predictions_path', value=self.path)
@@ -84,6 +97,26 @@ def read_summary_confidences(path):
     # Wrapper to "just get the iptm scores"
     p = Predictions(path)
     return p.read_summary_confidences()
+
+def _get_scores(pred, confidences_path):
+    with pred.open(confidences_path) as fh:
+        js = json.load(fh)
+
+    chain_ids = np.asarray(js['token_chain_ids'])
+    contact_probs = np.array(js['contact_probs'])
+    pae = np.array(js['pae'])
+
+    scores = (
+        min_by_grouping(pae, chain_ids), # chain_pair_pae_min_recap
+        max_by_grouping(contact_probs, chain_ids), # chain_pair_contact_probs_max
+    )
+    return scores
+
+def read_summary_scores(path):
+    pred = Predictions(path)
+    scores = pred.read_summary_confidences()
+    scores[['chain_pair_pae_min_recap', 'chain_pair_contact_probs_max']] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
+    return scores
 
 def read_model(path):
     # Wrapper to "just get the top model"
