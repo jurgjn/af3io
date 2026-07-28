@@ -5,18 +5,6 @@ from pathlib import Path
 
 import numpy as np, pandas as pd
 
-def max_by_grouping(arr, grouping):
-    grouping_unique = list(map(str, dict.fromkeys(grouping)))
-    row_max = np.stack([arr[grouping == group].max(axis=0) for group in grouping_unique])
-    grp_max = np.stack([row_max[:, grouping == group].max(axis=1) for group in grouping_unique], axis=1)
-    return grp_max
-
-def min_by_grouping(arr, grouping):
-    grouping_unique = list(map(str, dict.fromkeys(grouping)))
-    row_min = np.stack([arr[grouping == group].min(axis=0) for group in grouping_unique])
-    grp_min = np.stack([row_min[:, grouping == group].min(axis=1) for group in grouping_unique], axis=1)
-    return grp_min
-
 class Predictions:
     """
         Read AlphaFold3 predictions where the output directory from a single job has been compressed as a zip archive
@@ -98,6 +86,24 @@ def read_summary_confidences(path):
     p = Predictions(path)
     return p.read_summary_confidences()
 
+def max_by_grouping(arr, grouping):
+    grouping_unique = list(map(str, dict.fromkeys(grouping)))
+    row_max = np.stack([arr[grouping == group].max(axis=0) for group in grouping_unique])
+    grp_max = np.stack([row_max[:, grouping == group].max(axis=1) for group in grouping_unique], axis=1)
+    return grp_max
+
+def min_by_grouping(arr, grouping):
+    grouping_unique = list(map(str, dict.fromkeys(grouping)))
+    row_min = np.stack([arr[grouping == group].min(axis=0) for group in grouping_unique])
+    grp_min = np.stack([row_min[:, grouping == group].min(axis=1) for group in grouping_unique], axis=1)
+    return grp_min
+
+def sum_by_grouping(arr, grouping):
+    grouping_unique = list(map(str, dict.fromkeys(grouping)))
+    row_sum = np.stack([arr[grouping == group].sum(axis=0) for group in grouping_unique])
+    grp_sum = np.stack([row_sum[:, grouping == group].sum(axis=1) for group in grouping_unique], axis=1)
+    return grp_sum
+
 def _get_scores(pred, confidences_path):
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
@@ -106,23 +112,43 @@ def _get_scores(pred, confidences_path):
     contact_probs = np.array(js['contact_probs'])
     pae = np.array(js['pae'])
 
-    adhoc5 = contact_probs * np.exp(-np.maximum(pae, pae.T) / 5)
-    adhoc8 = contact_probs * np.exp(-np.maximum(pae, pae.T) / 8)
+    pae_probs1 = np.where(contact_probs > .1, pae, 32)
+    pae_probs3 = np.where(contact_probs > .3, pae, 32)
+    pae_probs5 = np.where(contact_probs > .5, pae, 32)
+
+    contact_probs_sum1 = np.where(contact_probs > .1, contact_probs, 0)
+    contact_probs_sum3 = np.where(contact_probs > .3, contact_probs, 0)
+    contact_probs_sum5 = np.where(contact_probs > .5, contact_probs, 0)
 
     scores = (
         min_by_grouping(pae, chain_ids), # chain_pair_pae_min_recap
+        min_by_grouping(pae_probs1, chain_ids), # chain_pair_pae_probs1_min
+        min_by_grouping(pae_probs3, chain_ids), # chain_pair_pae_probs3_min
+        min_by_grouping(pae_probs5, chain_ids), # chain_pair_pae_probs5_min
         max_by_grouping(contact_probs, chain_ids), # chain_pair_contact_probs_max
-        #max_by_grouping(adhoc5, chain_ids), # chain_pair_adhoc5
-        #max_by_grouping(adhoc8, chain_ids), # chain_pair_adhoc8
+        sum_by_grouping(contact_probs_sum1, chain_ids), # chain_pair_contact_probs_sum1
+        sum_by_grouping(contact_probs_sum3, chain_ids), # chain_pair_contact_probs_sum3
+        sum_by_grouping(contact_probs_sum5, chain_ids), # chain_pair_contact_probs_sum5
     )
     return scores
 
 def read_summary_scores(path):
     pred = Predictions(path)
     scores = pred.read_summary_confidences()
-    scores[['chain_pair_pae_min_recap', 'chain_pair_contact_probs_max']] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
+
+    cols_ = [
+        'chain_pair_pae_min_recap',
+        'chain_pair_pae_probs1_min',
+        'chain_pair_pae_probs3_min',
+        'chain_pair_pae_probs5_min',
+        'chain_pair_contact_probs_max',
+        'chain_pair_contact_probs_sum1',
+        'chain_pair_contact_probs_sum3',
+        'chain_pair_contact_probs_sum5',
+    ]
+    scores[cols_] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
     scores = scores.astype({'predictions_path': str})
-    for col_ in ['chain_pair_pae_min_recap', 'chain_pair_contact_probs_max']:
+    for col_ in cols_:
         scores[ col_ ] = scores[ col_ ].apply(np.ndarray.tolist)
     return scores
 
