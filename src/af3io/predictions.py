@@ -120,6 +120,10 @@ def _get_scores(pred, confidences_path):
     contact_probs_sum3 = np.where(contact_probs > .3, contact_probs, 0)
     contact_probs_sum5 = np.where(contact_probs > .5, contact_probs, 0)
 
+    contact_probs_pow2 = np.power(contact_probs, 2)
+    contact_probs_pow3 = np.power(contact_probs, 3)
+    contact_probs_pow4 = np.power(contact_probs, 4)
+
     scores = (
         min_by_grouping(pae, chain_ids), # chain_pair_pae_min_recap
         min_by_grouping(pae_probs1, chain_ids), # chain_pair_pae_probs1_min
@@ -129,6 +133,9 @@ def _get_scores(pred, confidences_path):
         sum_by_grouping(contact_probs_sum1, chain_ids), # chain_pair_contact_probs_sum1
         sum_by_grouping(contact_probs_sum3, chain_ids), # chain_pair_contact_probs_sum3
         sum_by_grouping(contact_probs_sum5, chain_ids), # chain_pair_contact_probs_sum5
+        sum_by_grouping(contact_probs_pow2, chain_ids), # chain_pair_contact_probs_pow2
+        sum_by_grouping(contact_probs_pow3, chain_ids), # chain_pair_contact_probs_pow3
+        sum_by_grouping(contact_probs_pow4, chain_ids), # chain_pair_contact_probs_pow4
     )
     return scores
 
@@ -145,6 +152,9 @@ def read_summary_scores(path):
         'chain_pair_contact_probs_sum1',
         'chain_pair_contact_probs_sum3',
         'chain_pair_contact_probs_sum5',
+        'chain_pair_contact_probs_pow2',
+        'chain_pair_contact_probs_pow3',
+        'chain_pair_contact_probs_pow4',
     ]
     scores[cols_] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
     scores = scores.astype({'predictions_path': str})
