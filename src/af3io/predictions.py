@@ -104,7 +104,7 @@ def sum_by_grouping(arr, grouping):
     grp_sum = np.stack([row_sum[:, grouping == group].sum(axis=1) for group in grouping_unique], axis=1)
     return grp_sum
 
-def _get_scores(pred, confidences_path):
+def _get_metrics(pred, confidences_path):
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
 
@@ -112,30 +112,28 @@ def _get_scores(pred, confidences_path):
     contact_probs = np.array(js['contact_probs'])
     pae = np.array(js['pae'])
 
-    pae_probs1 = np.where(contact_probs > .1, pae, 32)
-    pae_probs3 = np.where(contact_probs > .3, pae, 32)
-    pae_probs5 = np.where(contact_probs > .5, pae, 32)
-
-    contact_probs_sum1 = np.where(contact_probs > .1, contact_probs, 0)
-    contact_probs_sum3 = np.where(contact_probs > .3, contact_probs, 0)
-    contact_probs_sum5 = np.where(contact_probs > .5, contact_probs, 0)
+    # https://link.springer.com/article/10.1038/s44320-026-00189-7
+    # expected_ipTM = -0.036255571 + 0.004470512*sqrt(aa_in_protein1 + aa_in_protein2)
+    chain_lengths = np.array([len(list(g)) for k, g in itertools.groupby(chain_ids)])
+    chain_pair_lengths = chain_lengths[:, None] + chain_lengths[None, :]
+    chain_pair_iptm_expected = -0.036255571 + 0.004470512*np.sqrt(chain_pair_lengths)
 
     contact_probs_pow2 = np.power(contact_probs, 2)
     contact_probs_pow3 = np.power(contact_probs, 3)
     contact_probs_pow4 = np.power(contact_probs, 4)
+    contact_probs_pow8 = np.power(contact_probs, 8)
 
     scores = (
-        min_by_grouping(pae, chain_ids), # chain_pair_pae_min_recap
-        min_by_grouping(pae_probs1, chain_ids), # chain_pair_pae_probs1_min
-        min_by_grouping(pae_probs3, chain_ids), # chain_pair_pae_probs3_min
-        min_by_grouping(pae_probs5, chain_ids), # chain_pair_pae_probs5_min
-        max_by_grouping(contact_probs, chain_ids), # chain_pair_contact_probs_max
-        sum_by_grouping(contact_probs_sum1, chain_ids), # chain_pair_contact_probs_sum1
-        sum_by_grouping(contact_probs_sum3, chain_ids), # chain_pair_contact_probs_sum3
-        sum_by_grouping(contact_probs_sum5, chain_ids), # chain_pair_contact_probs_sum5
+        chain_pair_iptm_expected,
+        min_by_grouping(pae, chain_ids),                # chain_pair_pae_min_recap
+        max_by_grouping(contact_probs, chain_ids),      # chain_pair_contact_probs_max
+        sum_by_grouping(contact_probs > .5, chain_ids), # chain_pair_contact_probs_count5
+        sum_by_grouping(contact_probs > .95, chain_ids), # chain_pair_contact_probs_count95
+        sum_by_grouping(contact_probs, chain_ids),      # chain_pair_contact_probs_sum
         sum_by_grouping(contact_probs_pow2, chain_ids), # chain_pair_contact_probs_pow2
         sum_by_grouping(contact_probs_pow3, chain_ids), # chain_pair_contact_probs_pow3
         sum_by_grouping(contact_probs_pow4, chain_ids), # chain_pair_contact_probs_pow4
+        sum_by_grouping(contact_probs_pow8, chain_ids), # chain_pair_contact_probs_pow8
     )
     return scores
 
@@ -144,21 +142,21 @@ def read_summary_scores(path):
     scores = pred.read_summary_confidences()
 
     cols_ = [
+        'chain_pair_iptm_expected',
         'chain_pair_pae_min_recap',
-        'chain_pair_pae_probs1_min',
-        'chain_pair_pae_probs3_min',
-        'chain_pair_pae_probs5_min',
         'chain_pair_contact_probs_max',
-        'chain_pair_contact_probs_sum1',
-        'chain_pair_contact_probs_sum3',
-        'chain_pair_contact_probs_sum5',
+        'chain_pair_contact_probs_count5',
+        'chain_pair_contact_probs_count95',
+        'chain_pair_contact_probs_sum',
         'chain_pair_contact_probs_pow2',
         'chain_pair_contact_probs_pow3',
         'chain_pair_contact_probs_pow4',
+        'chain_pair_contact_probs_pow8',
     ]
-    scores[cols_] = [_get_scores(pred, confidences_path) for confidences_path in scores.confidences_path ]
+    scores[cols_] = [_get_metrics(pred, confidences_path) for confidences_path in scores.confidences_path ]
+    scores['chain_pair_iptm_corrected'] = scores['chain_pair_iptm'] - scores['chain_pair_iptm_expected']
     scores = scores.astype({'predictions_path': str})
-    for col_ in cols_:
+    for col_ in cols_ + ['chain_pair_iptm_corrected']:
         scores[ col_ ] = scores[ col_ ].apply(np.ndarray.tolist)
     return scores
 
