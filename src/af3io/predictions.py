@@ -1,9 +1,9 @@
 
-import contextlib, functools, glob, gzip, itertools, io, json, math, os, re, zipfile
+import collections, contextlib, functools, glob, gzip, itertools, io, json, math, os, re, zipfile
 from pprint import pprint
 from pathlib import Path
 
-import numpy as np, pandas as pd
+import numpy as np, scipy as sp, pandas as pd
 
 class Predictions:
     """
@@ -86,23 +86,27 @@ def read_summary_confidences(path):
     p = Predictions(path)
     return p.read_summary_confidences()
 
-def max_by_grouping(arr, grouping):
-    grouping_unique = list(map(str, dict.fromkeys(grouping)))
-    row_max = np.stack([arr[grouping == group].max(axis=0) for group in grouping_unique])
-    grp_max = np.stack([row_max[:, grouping == group].max(axis=1) for group in grouping_unique], axis=1)
-    return grp_max
+def chain_pair_reduce(arr, token_chain_ids, func):
+    # Apply a user-defined function to non-overlapping submatrices of a large square matrix (n by n dimension).
+    # The user-defined function is applied per submatrix, and returns a scalar.
+    # Sub-matrix sizes are defined by a list of submatrix widths; sum of list guaranteed to equal n.
+    widths = [sum(1 for _ in v) for k, v in itertools.groupby(token_chain_ids)]
+    edges = np.cumsum([0, *widths])
+    k = len(widths)
+    out = np.empty((k, k))
+    for i in range(k):
+        for j in range(k):
+            chain_pair_block = arr[edges[i]:edges[i+1], edges[j]:edges[j+1]]
+            out[i, j] = func(chain_pair_block)
+    return out
 
-def min_by_grouping(arr, grouping):
-    grouping_unique = list(map(str, dict.fromkeys(grouping)))
-    row_min = np.stack([arr[grouping == group].min(axis=0) for group in grouping_unique])
-    grp_min = np.stack([row_min[:, grouping == group].min(axis=1) for group in grouping_unique], axis=1)
-    return grp_min
-
-def sum_by_grouping(arr, grouping):
-    grouping_unique = list(map(str, dict.fromkeys(grouping)))
-    row_sum = np.stack([arr[grouping == group].sum(axis=0) for group in grouping_unique])
-    grp_sum = np.stack([row_sum[:, grouping == group].sum(axis=1) for group in grouping_unique], axis=1)
-    return grp_sum
+def gmean_k(arr, k):
+    flat = np.asarray(arr).ravel()
+    top_k = np.partition(flat, -k)[-k:]
+    if np.all(top_k == 0):
+        return 0.0
+    else:
+        return sp.stats.gmean(top_k)
 
 def _get_metrics(pred, confidences_path):
     with pred.open(confidences_path) as fh:
@@ -123,42 +127,42 @@ def _get_metrics(pred, confidences_path):
     contact_probs_pow4 = np.power(contact_probs, 4)
     contact_probs_pow8 = np.power(contact_probs, 8)
 
-    scores = (
-        chain_pair_iptm_expected,
-        min_by_grouping(pae, chain_ids),                # chain_pair_pae_min_recap
-        max_by_grouping(contact_probs, chain_ids),      # chain_pair_contact_probs_max
-        sum_by_grouping(contact_probs > .5, chain_ids), # chain_pair_contact_probs_count5
-        sum_by_grouping(contact_probs > .95, chain_ids), # chain_pair_contact_probs_count95
-        sum_by_grouping(contact_probs, chain_ids),      # chain_pair_contact_probs_sum
-        sum_by_grouping(contact_probs_pow2, chain_ids), # chain_pair_contact_probs_pow2
-        sum_by_grouping(contact_probs_pow3, chain_ids), # chain_pair_contact_probs_pow3
-        sum_by_grouping(contact_probs_pow4, chain_ids), # chain_pair_contact_probs_pow4
-        sum_by_grouping(contact_probs_pow8, chain_ids), # chain_pair_contact_probs_pow8
-    )
+    scores = collections.OrderedDict([
+        ('chain_pair_pae_min_recap', chain_pair_reduce(pae, chain_ids, np.min)),
+        ('chain_pair_pae_gmean3',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 3))),
+        ('chain_pair_pae_gmean5',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 5))),
+        ('chain_pair_pae_gmean10',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 10))),
+        ('chain_pair_pae_gmean15',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 15))),
+        ('chain_pair_contact_probs_max',     chain_pair_reduce(contact_probs, chain_ids, np.max)),
+        ('chain_pair_contact_probs_count5',  chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_count95', chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_sum',     chain_pair_reduce(contact_probs, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow2',    chain_pair_reduce(contact_probs_pow2, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow3',    chain_pair_reduce(contact_probs_pow3, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow4',    chain_pair_reduce(contact_probs_pow4, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow8',    chain_pair_reduce(contact_probs_pow8, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_gmean3',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 3))),
+        ('chain_pair_contact_probs_gmean5',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 5))),
+        ('chain_pair_contact_probs_gmean10', chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 10))),
+        ('chain_pair_contact_probs_gmean15', chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 15))),
+        ('chain_pair_iptm_expected', chain_pair_iptm_expected),
+    ])
     return scores
 
 def read_summary_scores(path):
     pred = Predictions(path)
     scores = pred.read_summary_confidences()
+    custom = pd.DataFrame( [_get_metrics(pred, confidences_path) for confidences_path in scores.confidences_path ] )
+    custom['chain_pair_iptm_corrected'] = scores['chain_pair_iptm'] - custom['chain_pair_iptm_expected']
+    
+    merged = pd.concat([scores, custom], axis=1)
+    merged = merged.astype({'predictions_path': str})
+    for col_ in custom.columns:
+        merged[ col_ ] = merged[ col_ ].apply(np.ndarray.tolist)
 
-    cols_ = [
-        'chain_pair_iptm_expected',
-        'chain_pair_pae_min_recap',
-        'chain_pair_contact_probs_max',
-        'chain_pair_contact_probs_count5',
-        'chain_pair_contact_probs_count95',
-        'chain_pair_contact_probs_sum',
-        'chain_pair_contact_probs_pow2',
-        'chain_pair_contact_probs_pow3',
-        'chain_pair_contact_probs_pow4',
-        'chain_pair_contact_probs_pow8',
-    ]
-    scores[cols_] = [_get_metrics(pred, confidences_path) for confidences_path in scores.confidences_path ]
-    scores['chain_pair_iptm_corrected'] = scores['chain_pair_iptm'] - scores['chain_pair_iptm_expected']
-    scores = scores.astype({'predictions_path': str})
-    for col_ in cols_ + ['chain_pair_iptm_corrected']:
-        scores[ col_ ] = scores[ col_ ].apply(np.ndarray.tolist)
-    return scores
+    cols = list(scores.columns)
+    pos = cols.index('chain_pair_pae_min') + 1
+    return merged[ cols[:pos] + list(custom.columns) + cols[pos:] ]
 
 def read_model(path):
     # Wrapper to "just get the top model"
