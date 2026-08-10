@@ -15,6 +15,7 @@ classifiers = [
 dependencies = [
   "click",
   "humanfriendly",
+  "scipy",
   "pandas",
   "zarr",
 ]
