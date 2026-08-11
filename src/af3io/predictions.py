@@ -108,13 +108,24 @@ def gmean_k(arr, k):
     else:
         return sp.stats.gmean(top_k)
 
+def gmean_k_smallest(arr, k):
+    flat = np.asarray(arr).ravel()
+    bottom_k = np.partition(flat, k - 1)[:k]
+    if np.all(bottom_k == 0):
+        return 0.0
+    else:
+        return sp.stats.gmean(bottom_k)
+
 def _get_metrics(pred, confidences_path):
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
 
     chain_ids = np.asarray(js['token_chain_ids'])
-    contact_probs = np.array(js['contact_probs'])
+    contact_probs = np.array(js['contact_probs']) # byte-identical across models (but not seeds)
+
+    # PAE not symmetric, aggregate by taking the more pessimistic value (max)
     pae = np.array(js['pae'])
+    pae = np.maximum(pae, pae.T)
 
     # https://link.springer.com/article/10.1038/s44320-026-00189-7
     # expected_ipTM = -0.036255571 + 0.004470512*sqrt(aa_in_protein1 + aa_in_protein2)
@@ -129,10 +140,10 @@ def _get_metrics(pred, confidences_path):
 
     scores = collections.OrderedDict([
         ('chain_pair_pae_min_recap', chain_pair_reduce(pae, chain_ids, np.min)),
-        ('chain_pair_pae_gmean3',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 3))),
-        ('chain_pair_pae_gmean5',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 5))),
-        ('chain_pair_pae_gmean10',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 10))),
-        ('chain_pair_pae_gmean15',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k(arr, 15))),
+        ('chain_pair_pae_gmean3',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 3))),
+        ('chain_pair_pae_gmean5',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 5))),
+        ('chain_pair_pae_gmean10',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 10))),
+        ('chain_pair_pae_gmean15',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 15))),
         ('chain_pair_contact_probs_max',     chain_pair_reduce(contact_probs, chain_ids, np.max)),
         ('chain_pair_contact_probs_count5',  chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
         ('chain_pair_contact_probs_count95', chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
