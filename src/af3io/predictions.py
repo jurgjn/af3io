@@ -101,45 +101,10 @@ def chain_pair_reduce(arr, token_chain_ids, func):
             out[i, j] = func(chain_pair_block)
     return out
 
-def gmean_k(arr, k):
+def mean_k(arr, k):
     flat = np.asarray(arr).ravel()
     top_k = np.partition(flat, -k)[-k:]
-    if np.all(top_k == 0):
-        return 0.0
-    else:
-        return sp.stats.gmean(top_k)
-
-def gmean_k_smallest(arr, k):
-    flat = np.asarray(arr).ravel()
-    bottom_k = np.partition(flat, k - 1)[:k]
-    if np.all(bottom_k == 0):
-        return 0.0
-    else:
-        return sp.stats.gmean(bottom_k)
-
-def logavgexp_temp(arr, tau):
-    # LogAvgExp pooling applied directly to the raw contact probabilities (not log(p)),
-    # temperature tau as in https://arxiv.org/abs/2111.01742:
-    #   LogAvgExp_tau(p) = tau * log(mean(exp(p / tau)))
-    flat = np.asarray(arr).ravel()
-    return tau * scipy.special.logsumexp(flat / tau, b=1.0 / flat.size)
-
-def noisy_or(arr):
-    # Combine per-token-pair contact probabilities into P(>=1 true contact in the interface),
-    # assuming (naively) conditional independence between token pairs:
-    #   P(>=1 contact) = 1 - prod(1 - p_ij) = 1 - exp(sum(log(1 - p_ij)))
-    # No free exponent/k to tune. Note log(1-p) = -sum_k p^k/k, so contact_probs_pow3 is
-    # effectively a crude truncated (k=3, unweighted) approximation of this exact combination.
-    # log1p/expm1 used for numerical stability when p is close to 0 or 1.
-    flat = np.asarray(arr).ravel()
-    return -np.expm1(np.sum(np.log1p(-flat)))
-
-def noisy_or_mean(arr):
-    # Same combination rule, but normalized per-pair (geometric mean of the "no contact" survival
-    # probabilities) so blocks of different size (protein-length dependent) are comparable without
-    # the sum growing just because there are more token pairs.
-    flat = np.asarray(arr).ravel()
-    return -np.expm1(np.mean(np.log1p(-flat)))
+    return np.mean(top_k)
 
 def _get_metrics(pred, confidences_path):
     with pred.open(confidences_path) as fh:
@@ -160,46 +125,24 @@ def _get_metrics(pred, confidences_path):
 
     contact_probs_pow2 = np.power(contact_probs, 2)
     contact_probs_pow3 = np.power(contact_probs, 3)
-    contact_probs_pow4 = np.power(contact_probs, 4)
+    #contact_probs_pow4 = np.power(contact_probs, 4)
     contact_probs_pow8 = np.power(contact_probs, 8)
 
     scores = collections.OrderedDict([
-        ('chain_pair_pae_min_recap', chain_pair_reduce(pae, chain_ids, np.min)),
-        ('chain_pair_pae_gmean3',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 3))),
-        ('chain_pair_pae_gmean5',    chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 5))),
-        ('chain_pair_pae_gmean10',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 10))),
-        ('chain_pair_pae_gmean15',   chain_pair_reduce(pae, chain_ids, lambda arr: gmean_k_smallest(arr, 15))),
-        ('chain_pair_contact_probs_max',     chain_pair_reduce(contact_probs, chain_ids, np.max)),
-        #('chain_pair_contact_probs_count5',  chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_count95', chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_sum',     chain_pair_reduce(contact_probs, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow2',    chain_pair_reduce(contact_probs_pow2, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_pow3',    chain_pair_reduce(contact_probs_pow3, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow4',    chain_pair_reduce(contact_probs_pow4, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow8',    chain_pair_reduce(contact_probs_pow8, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_gmean3',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 3))),
-        #('chain_pair_contact_probs_gmean5',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 5))),
-        #('chain_pair_contact_probs_gmean10', chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 10))),
-        #('chain_pair_contact_probs_gmean15', chain_pair_reduce(contact_probs, chain_ids, lambda arr: gmean_k(arr, 15))),
-        ('chain_pair_contact_probs_noisyor',      chain_pair_reduce(contact_probs, chain_ids, noisy_or)),
-        ('chain_pair_contact_probs_noisyor_mean', chain_pair_reduce(contact_probs, chain_ids, noisy_or_mean)),
-        ('chain_pair_contact_probs_logavgexp_temp0p01', chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_temp(arr, 0.01))),
-        ('chain_pair_contact_probs_logavgexp_temp0p05', chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_temp(arr, 0.05))),
-        ('chain_pair_contact_probs_logavgexp_temp0p1',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_temp(arr, 0.1))),
-        ('chain_pair_contact_probs_logavgexp_temp0p25', chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_temp(arr, 0.25))),
-        ('chain_pair_contact_probs_logavgexp_temp0p5',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_temp(arr, 0.5))),
-        #('chain_pair_contact_probs_logsumexp2',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logsumexp_k(arr, 2))),
-        #('chain_pair_contact_probs_logsumexp3',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logsumexp_k(arr, 3))),
-        #('chain_pair_contact_probs_logsumexp4',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logsumexp_k(arr, 4))),
-        #('chain_pair_contact_probs_logsumexp8',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logsumexp_k(arr, 8))),
-        #('chain_pair_contact_probs_logavgexp2',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_k(arr, 2))),
-        #('chain_pair_contact_probs_logavgexp3',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_k(arr, 3))),
-        #('chain_pair_contact_probs_logavgexp4',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_k(arr, 4))),
-        #('chain_pair_contact_probs_logavgexp8',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: logavgexp_k(arr, 8))),
-        #('chain_pair_contact_probs_powermean2',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: power_mean_k(arr, 2))),
-        #('chain_pair_contact_probs_powermean3',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: power_mean_k(arr, 3))),
-        #('chain_pair_contact_probs_powermean4',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: power_mean_k(arr, 4))),
-        #('chain_pair_contact_probs_powermean8',  chain_pair_reduce(contact_probs, chain_ids, lambda arr: power_mean_k(arr, 8))),
+        ('chain_pair_pae_min_recap',            chain_pair_reduce(pae, chain_ids, np.min)),
+        ('chain_pair_contact_probs_max',        chain_pair_reduce(contact_probs, chain_ids, np.max)),
+        #('chain_pair_contact_probs_count5',    chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
+        #('chain_pair_contact_probs_count95',   chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_sum',        chain_pair_reduce(contact_probs, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow2',       chain_pair_reduce(contact_probs_pow2, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow3',       chain_pair_reduce(contact_probs_pow3, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow3_sum10', chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 10))),
+        ('chain_pair_contact_probs_pow3_sum30', chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 30))),
+        ('chain_pair_contact_probs_pow3_sum50', chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 50))),
+        ('chain_pair_contact_probs_pow8',       chain_pair_reduce(contact_probs_pow8, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_pow8_sum10', chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 10))),
+        ('chain_pair_contact_probs_pow8_sum30', chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 30))),
+        ('chain_pair_contact_probs_pow8_sum50', chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 50))),
         ('chain_pair_iptm_expected', chain_pair_iptm_expected),
     ])
     return scores
