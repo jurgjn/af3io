@@ -195,9 +195,24 @@ def read_summary_scores(path):
     pos = cols.index('chain_pair_pae_min') + 1
     return merged[ cols[:pos] + list(custom.columns) + cols[pos:] ]
 
+def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
+    # contact_probs profile for chain1 residues by aggregating over chain2 residues using aggfunc
+    pred = Predictions(path)
+    scores = pred.read_summary_confidences()
+    confidences_path = scores.head(1)['confidences_path'].squeeze()
+    with pred.open(confidences_path) as fh:
+        js = json.load(fh)
+
+    chain_ids = np.asarray(js['token_chain_ids'])
+    contact_probs = np.array(js['contact_probs'])
+    block = contact_probs[ np.ix_(chain_ids == chain1, chain_ids == chain2) ]
+    return aggfunc(block, axis=1)
+
 def read_model(path):
     # Wrapper to "just get the top model"
     p = Predictions(path)
     with zipfile.ZipFile(p.path) as fh_zip:
         with fh_zip.open(p.model_path) as fh:
             return fh.read().decode()
+
+
