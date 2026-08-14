@@ -114,6 +114,11 @@ def mean_k(arr, k):
     top_k = np.partition(flat, -k)[-k:]
     return np.mean(top_k)
 
+def mean_k_smallest(arr, k):
+    flat = np.asarray(arr).ravel()
+    bottom_k = np.partition(flat, k - 1)[:k]
+    return np.mean(bottom_k)
+
 def _get_metrics(pred, confidences_path):
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
@@ -138,16 +143,27 @@ def _get_metrics(pred, confidences_path):
 
     scores = collections.OrderedDict([
         ('chain_pair_pae_min_recap',              chain_pair_reduce(pae, chain_ids, np.min)),
-        ('chain_pair_pae_min_3',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 3))),
-        ('chain_pair_pae_min_5',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 5))),
-        ('chain_pair_pae_min_10',                 chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 10))),
-        ('chain_pair_pae_min_30',                 chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 30))),
-        ('chain_pair_pae_min_50',                 chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 50))),
+        #('chain_pair_pae_min3',                   chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 3))),
+        ('chain_pair_pae_min5',                   chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 5))),
+        ('chain_pair_pae_min10',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 10))),
+        #('chain_pair_pae_min30',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 30))),
+        ('chain_pair_pae_min50',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 50))),
+        #('chain_pair_pae_mean3',                  chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 3))),
+        ('chain_pair_pae_mean5',                  chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 5))),
+        ('chain_pair_pae_mean10',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 10))),
+        #('chain_pair_pae_mean30',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 30))),
+        ('chain_pair_pae_mean50',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 50))),
         ('chain_pair_contact_probs_max',          chain_pair_reduce(contact_probs, chain_ids, np.max)),
-        ('chain_pair_contact_probs_5',            chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 5))),
-        ('chain_pair_contact_probs_10',           chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 10))),
-        ('chain_pair_contact_probs_30',           chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 30))),
-        ('chain_pair_contact_probs_50',           chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 50))),
+        #('chain_pair_contact_probs_max3',         chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 3))),
+        ('chain_pair_contact_probs_max5',         chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 5))),
+        ('chain_pair_contact_probs_max10',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 10))),
+        #('chain_pair_contact_probs_max30',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 30))),
+        ('chain_pair_contact_probs_max50',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 50))),
+        #('chain_pair_contact_probs_mean3',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 3))),
+        ('chain_pair_contact_probs_mean5',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 5))),
+        ('chain_pair_contact_probs_mean10',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 10))),
+        #('chain_pair_contact_probs_mean30',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 30))),
+        ('chain_pair_contact_probs_mean50',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 50))),
         #('chain_pair_contact_probs_count5',      chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
         #('chain_pair_contact_probs_count95',     chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
         #('chain_pair_contact_probs_sum',         chain_pair_reduce(contact_probs, chain_ids, np.sum)),
