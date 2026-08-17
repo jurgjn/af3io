@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np, scipy as sp, pandas as pd
 import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
+import Bio, Bio.PDB
+
 class Predictions:
     """
         Read AlphaFold3 predictions where the output directory from a single job has been compressed as a zip archive
@@ -87,6 +89,27 @@ def read_summary_confidences(path):
     p = Predictions(path)
     return p.read_summary_confidences()
 
+def pseudo_beta(res):
+    if res.get_resname() != 'GLY' and 'CB' in res:
+        return res['CB']
+    return res['CA'] if 'CA' in res else None
+
+def get_model_coords(struct):
+    return np.asarray( [pseudo_beta(res).coord for res in struct.get_residues() ] )
+
+def get_dist(struct):
+    coords = get_model_coords(struct)
+    dist = sp.spatial.distance.cdist(coords, coords)
+    return dist
+
+def read_struct(pred, model_path):
+    with pred.open(model_path) as fh_model:
+        model_name = Path(model_path).stem
+        pdb_str = fh_model.read().decode()
+        parser = Bio.PDB.FastMMCIFParser()
+        struct = parser.get_structure(model_name, io.StringIO(pdb_str))
+        return struct[0]
+
 def chain_pair_reduce(arr, token_chain_ids, func):
     # Apply a user-defined function to non-overlapping submatrices of a large square matrix (n by n dimension).
     # The user-defined function is applied per submatrix, and returns a scalar.
@@ -101,25 +124,7 @@ def chain_pair_reduce(arr, token_chain_ids, func):
             out[i, j] = func(chain_pair_block)
     return out
 
-def kth_min(arr, k):
-    flat = np.asarray(arr).ravel()
-    return np.partition(flat, k - 1)[k - 1]
-
-def kth_max(arr, k):
-    flat = np.asarray(arr).ravel()
-    return np.partition(flat, -k)[-k]
-
-def mean_k(arr, k):
-    flat = np.asarray(arr).ravel()
-    top_k = np.partition(flat, -k)[-k:]
-    return np.mean(top_k)
-
-def mean_k_smallest(arr, k):
-    flat = np.asarray(arr).ravel()
-    bottom_k = np.partition(flat, k - 1)[:k]
-    return np.mean(bottom_k)
-
-def _get_metrics(pred, confidences_path):
+def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
 
@@ -130,61 +135,37 @@ def _get_metrics(pred, confidences_path):
     pae = np.array(js['pae'])
     pae = np.maximum(pae, pae.T)
 
+    isin_8A = get_dist(read_struct(pred, model_path)) <= 8
+
     # https://link.springer.com/article/10.1038/s44320-026-00189-7
     # expected_ipTM = -0.036255571 + 0.004470512*sqrt(aa_in_protein1 + aa_in_protein2)
     chain_lengths = np.array([len(list(g)) for k, g in itertools.groupby(chain_ids)])
     chain_pair_lengths = chain_lengths[:, None] + chain_lengths[None, :]
     chain_pair_iptm_expected = -0.036255571 + 0.004470512*np.sqrt(chain_pair_lengths)
 
-    #contact_probs_pow2 = np.power(contact_probs, 2)
+    contact_probs_pow2 = np.power(contact_probs, 2)
     contact_probs_pow3 = np.power(contact_probs, 3)
-    #contact_probs_pow4 = np.power(contact_probs, 4)
+    contact_probs_pow4 = np.power(contact_probs, 4)
     contact_probs_pow8 = np.power(contact_probs, 8)
 
     scores = collections.OrderedDict([
-        ('chain_pair_pae_min_recap',              chain_pair_reduce(pae, chain_ids, np.min)),
-        #('chain_pair_pae_min3',                   chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 3))),
-        ('chain_pair_pae_min5',                   chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 5))),
-        ('chain_pair_pae_min10',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 10))),
-        #('chain_pair_pae_min30',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 30))),
-        ('chain_pair_pae_min50',                  chain_pair_reduce(pae, chain_ids, lambda arr: kth_min(arr, 50))),
-        #('chain_pair_pae_mean3',                  chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 3))),
-        ('chain_pair_pae_mean5',                  chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 5))),
-        ('chain_pair_pae_mean10',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 10))),
-        #('chain_pair_pae_mean30',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 30))),
-        ('chain_pair_pae_mean50',                 chain_pair_reduce(pae, chain_ids, lambda arr: mean_k_smallest(arr, 50))),
-        ('chain_pair_contact_probs_max',          chain_pair_reduce(contact_probs, chain_ids, np.max)),
-        #('chain_pair_contact_probs_max3',         chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 3))),
-        ('chain_pair_contact_probs_max5',         chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 5))),
-        ('chain_pair_contact_probs_max10',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 10))),
-        #('chain_pair_contact_probs_max30',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 30))),
-        ('chain_pair_contact_probs_max50',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: kth_max(arr, 50))),
-        #('chain_pair_contact_probs_mean3',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 3))),
-        ('chain_pair_contact_probs_mean5',        chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 5))),
-        ('chain_pair_contact_probs_mean10',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 10))),
-        #('chain_pair_contact_probs_mean30',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 30))),
-        ('chain_pair_contact_probs_mean50',       chain_pair_reduce(contact_probs, chain_ids, lambda arr: mean_k(arr, 50))),
-        #('chain_pair_contact_probs_count5',      chain_pair_reduce(contact_probs > .5, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_count95',     chain_pair_reduce(contact_probs > .95, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_sum',         chain_pair_reduce(contact_probs, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow2',        chain_pair_reduce(contact_probs_pow2, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_pow3',         chain_pair_reduce(contact_probs_pow3, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow3_mean10',  chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 10))),
-        #('chain_pair_contact_probs_pow3_mean30',  chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 30))),
-        #('chain_pair_contact_probs_pow3_mean50',  chain_pair_reduce(contact_probs_pow3, chain_ids, lambda arr: mean_k(arr, 50))),
-        ('chain_pair_contact_probs_pow8',         chain_pair_reduce(contact_probs_pow8, chain_ids, np.sum)),
-        #('chain_pair_contact_probs_pow8_mean10',  chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 10))),
-        #('chain_pair_contact_probs_pow8_mean30',  chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 30))),
-        #('chain_pair_contact_probs_pow8_mean50',  chain_pair_reduce(contact_probs_pow8, chain_ids, lambda arr: mean_k(arr, 50))),
-        ('chain_pair_iptm_expected',              chain_pair_iptm_expected),
+        ('chain_pair_iptm_expected',                chain_pair_iptm_expected),
+        ('chain_pair_iptm_corrected',               chain_pair_iptm - chain_pair_iptm_expected),
+        ('chain_pair_contact_probs_max',            chain_pair_reduce(contact_probs, chain_ids, np.max)),
+        ('chain_pair_contact_probs_8A_max',         chain_pair_reduce(contact_probs * isin_8A, chain_ids, np.max)),
+        ('chain_pair_contact_probs_8A_sum',         chain_pair_reduce(contact_probs * isin_8A, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_8A_pow2',        chain_pair_reduce(contact_probs_pow2 * isin_8A, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_8A_pow3',        chain_pair_reduce(contact_probs_pow3 * isin_8A, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_8A_pow4',        chain_pair_reduce(contact_probs_pow4 * isin_8A, chain_ids, np.sum)),
+        ('chain_pair_contact_probs_8A_pow8',        chain_pair_reduce(contact_probs_pow8 * isin_8A, chain_ids, np.sum)),
+        ('chain_pair_pae_min_recap',                chain_pair_reduce(pae, chain_ids, np.min)),
     ])
     return scores
 
 def read_summary_scores(path):
     pred = Predictions(path)
     scores = pred.read_summary_confidences()
-    custom = pd.DataFrame( [_get_metrics(pred, confidences_path) for confidences_path in scores.confidences_path ] )
-    custom['chain_pair_iptm_corrected'] = scores['chain_pair_iptm'] - custom['chain_pair_iptm_expected']
+    custom = pd.DataFrame( [* map(_get_metrics, itertools.repeat(pred), scores.confidences_path, scores.model_path, scores['chain_pair_iptm']) ] )
     
     merged = pd.concat([scores, custom], axis=1)
     merged = merged.astype({'predictions_path': str})
@@ -192,7 +173,7 @@ def read_summary_scores(path):
         merged[ col_ ] = merged[ col_ ].apply(np.ndarray.tolist)
 
     cols = list(scores.columns)
-    pos = cols.index('chain_pair_pae_min') + 1
+    pos = cols.index('chain_pair_iptm') + 1
     return merged[ cols[:pos] + list(custom.columns) + cols[pos:] ]
 
 def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
@@ -214,5 +195,3 @@ def read_model(path):
     with zipfile.ZipFile(p.path) as fh_zip:
         with fh_zip.open(p.model_path) as fh:
             return fh.read().decode()
-
-
