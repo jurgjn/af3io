@@ -18,6 +18,7 @@ dependencies = [
   "scipy",
   "pandas",
   "zarr",
+  "biopython",
 ]
 
 [project.scripts]
