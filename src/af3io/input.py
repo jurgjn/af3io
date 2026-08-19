@@ -12,7 +12,7 @@ from .core import *
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None #https://github.com/python/typing/issues/182#issuecomment-1320974824
 
 def _encode_indices_arrays(js):
-    #https://github.com/google-deepmind/alphafold3/blob/v3.0.1/src/alphafold3/common/folding_input.py#L1294-L1302
+    # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/common/folding_input.py#L1485-L1493
     return re.sub(
         r'("(?:queryIndices|templateIndices)": \[)([\s\n\d,]+)(\],?)',
         lambda mtch: mtch[1] + re.sub(r'\n\s+', ' ', mtch[2].strip()) + mtch[3],
