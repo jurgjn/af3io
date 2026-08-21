@@ -1,7 +1,7 @@
 
 # pytest --capture=no --disable-warnings
 
-import hashlib, os
+import collections, hashlib, os
 import click, click.testing, pytest, af3io, af3io.cli
 
 def md5sum(file):
@@ -109,3 +109,73 @@ def test_data_fill(example_data_json):
         md5_original = md5sum(example_data_json)
         md5_filled = md5sum('multimer_msas/pools_5k_0040f80_data.json')
         assert md5_original == md5_filled
+
+def test_data_fill_dna_chain(tmp_path):
+    """ DNA chains have no MSA and no templates in data pipeline output; filling
+    an input containing one must not fail, and must leave the protein path alone.
+    """
+    protein_seq = 'MKTFFVAGL'
+    dna_seq = 'GTACTAGCAT'
+
+    # Fake data pipeline output: protein carries an MSA and templates, DNA carries
+    # neither, which is what AlphaFold 3 emits for nucleic acids.
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+
+    js_protein = af3io.input.init(name='protein_chain')
+    js_protein['sequences'].append(af3io.input.init_sequence('protein', 'A', protein_seq))
+    js_protein['sequences'][0]['protein'].update({
+        'unpairedMsa': f'>query\n{protein_seq}\n',
+        'pairedMsa': '',
+        'templates': [],
+    })
+    af3io.input.write(js_protein, str(data_dir / 'protein_chain_data.json'))
+
+    js_dna = af3io.input.init(name='dna_chain')
+    js_dna['sequences'].append(af3io.input.init_sequence('dna', 'B', dna_seq))
+    af3io.input.write(js_dna, str(data_dir / 'dna_chain_data.json'))
+
+    index = af3io.data.create_index(str(data_dir))
+
+    # Protein + two DNA strands + a ligand
+    js = af3io.input.init(name='complex')
+    js['sequences'].append(af3io.input.init_sequence('protein', 'A', protein_seq))
+    js['sequences'].append(af3io.input.init_sequence('dna', 'B', dna_seq))
+    js['sequences'].append(af3io.input.init_sequence('dna', 'C', dna_seq))
+    js['sequences'].append(collections.OrderedDict([('ligand', {'id': 'D', 'ccdCodes': ['ATP']})]))
+
+    js_filled = af3io.data.fill(af3io.data.lookup(js, index))
+
+    filled = {seq_fields['id']: seq_fields for _, seq_fields in af3io.input.iter_sequences(js_filled)}
+    for field in ('unpairedMsa', 'pairedMsa', 'templates'):
+        assert field in filled['A']
+        assert field not in filled['B']
+        assert field not in filled['C']
+    assert filled['D']['ccdCodes'] == ['ATP']
+
+def test_data_fill_protein_only_unchanged(tmp_path):
+    """ Pin the protein path: all three fields are copied as before. """
+    protein_seq = 'MKTFFVAGL'
+    unpaired = f'>query\n{protein_seq}\n'
+
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    js_protein = af3io.input.init(name='protein_chain')
+    js_protein['sequences'].append(af3io.input.init_sequence('protein', 'A', protein_seq))
+    js_protein['sequences'][0]['protein'].update({
+        'unpairedMsa': unpaired,
+        'pairedMsa': '',
+        'templates': [],
+    })
+    af3io.input.write(js_protein, str(data_dir / 'protein_chain_data.json'))
+
+    index = af3io.data.create_index(str(data_dir))
+    js = af3io.input.init(name='monomer')
+    js['sequences'].append(af3io.input.init_sequence('protein', 'A', protein_seq))
+    js_filled = af3io.data.fill(af3io.data.lookup(js, index))
+
+    _, seq_fields = next(iter(af3io.input.iter_sequences(js_filled)))
+    assert seq_fields['unpairedMsa'] == unpaired
+    assert seq_fields['pairedMsa'] == ''
+    assert seq_fields['templates'] == []
+    assert 'dataPath' not in seq_fields
