@@ -69,9 +69,15 @@ def fill(js):
             if seq_type == seq_type_fill and seq_fields['sequence'] == seq_fields_fill.get('sequence'):
                 click.echo(f'\tfill id={seq_fields["id"]} from id={seq_fields_fill["id"]} in {seq_fields["dataPath"]}')
                 seq_fields['modifications'] = []
-                seq_fields['unpairedMsa'] = seq_fields_fill['unpairedMsa']
-                seq_fields['pairedMsa'] = seq_fields_fill['pairedMsa']
-                seq_fields['templates'] = seq_fields_fill['templates'].copy()
+                # Which of these the cached record has depends on the chain
+                # type: protein has an MSA and templates, RNA has an MSA but no
+                # templates, DNA has neither. Copy whichever are present;
+                # protein records always carry all three.
+                for field in ('unpairedMsa', 'pairedMsa'):
+                    if field in seq_fields_fill:
+                        seq_fields[field] = seq_fields_fill[field]
+                if 'templates' in seq_fields_fill:
+                    seq_fields['templates'] = seq_fields_fill['templates'].copy()
                 del seq_fields['dataPath']
 
     # Always set by the data pipeline; set here to get identical files
