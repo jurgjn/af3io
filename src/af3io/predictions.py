@@ -8,6 +8,8 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
+from .scoring import chain_pair_reduce, ptm_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm
+
 class Predictions:
     """
         Read AlphaFold3 predictions where the output directory from a single job has been compressed as a zip archive
@@ -110,55 +112,35 @@ def read_struct(pred, model_path):
         struct = parser.get_structure(model_name, io.StringIO(pdb_str))
         return struct[0]
 
-def chain_pair_reduce(arr, token_chain_ids, func):
-    # Apply a user-defined function to non-overlapping submatrices of a large square matrix (n by n dimension).
-    # The user-defined function is applied per submatrix, and returns a scalar.
-    # Sub-matrix sizes are defined by a list of submatrix widths; sum of list guaranteed to equal n.
-    widths = [sum(1 for _ in v) for k, v in itertools.groupby(token_chain_ids)]
-    edges = np.cumsum([0, *widths])
-    k = len(widths)
-    out = np.empty((k, k))
-    for i in range(k):
-        for j in range(k):
-            chain_pair_block = arr[edges[i]:edges[i+1], edges[j]:edges[j+1]]
-            out[i, j] = func(chain_pair_block)
-    return out
-
 def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
+    # Assumes input is protein chains only..
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
 
     chain_ids = np.asarray(js['token_chain_ids'])
     contact_probs = np.array(js['contact_probs']) # byte-identical across models (but not seeds)
 
-    # PAE not symmetric, aggregate by taking the more pessimistic value (max)
+    # PAE not symmetric, different across all models/samples
     pae = np.array(js['pae'])
-    pae = np.maximum(pae, pae.T)
 
+    # contact matrix based on model coordinates
     isin_8A = get_dist(read_struct(pred, model_path)) <= 8
 
     # https://link.springer.com/article/10.1038/s44320-026-00189-7
     # expected_ipTM = -0.036255571 + 0.004470512*sqrt(aa_in_protein1 + aa_in_protein2)
     chain_lengths = np.array([len(list(g)) for k, g in itertools.groupby(chain_ids)])
-    chain_pair_lengths = chain_lengths[:, None] + chain_lengths[None, :]
-    chain_pair_iptm_expected = -0.036255571 + 0.004470512*np.sqrt(chain_pair_lengths)
-
-    contact_probs_pow2 = np.power(contact_probs, 2)
-    contact_probs_pow3 = np.power(contact_probs, 3)
-    contact_probs_pow4 = np.power(contact_probs, 4)
-    contact_probs_pow8 = np.power(contact_probs, 8)
+    chain_pair_lengths_sum = chain_lengths[:, None] + chain_lengths[None, :]
+    chain_pair_iptm_expected = -0.036255571 + 0.004470512*np.sqrt(chain_pair_lengths_sum)
 
     scores = collections.OrderedDict([
-        ('chain_pair_iptm_expected',                chain_pair_iptm_expected),
-        ('chain_pair_iptm_corrected',               chain_pair_iptm - chain_pair_iptm_expected),
-        ('chain_pair_contact_probs_max',            chain_pair_reduce(contact_probs, chain_ids, np.max)),
-        ('chain_pair_contact_probs_8A_max',         chain_pair_reduce(contact_probs * isin_8A, chain_ids, np.max)),
-        ('chain_pair_contact_probs_8A_sum',         chain_pair_reduce(contact_probs * isin_8A, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_8A_pow2',        chain_pair_reduce(contact_probs_pow2 * isin_8A, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_8A_pow3',        chain_pair_reduce(contact_probs_pow3 * isin_8A, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_8A_pow4',        chain_pair_reduce(contact_probs_pow4 * isin_8A, chain_ids, np.sum)),
-        ('chain_pair_contact_probs_8A_pow8',        chain_pair_reduce(contact_probs_pow8 * isin_8A, chain_ids, np.sum)),
-        ('chain_pair_pae_min_recap',                chain_pair_reduce(pae, chain_ids, np.min)),
+        ('chain_pair_iptm_corrected',               np.round(chain_pair_iptm - chain_pair_iptm_expected, 3)),
+        ('chain_pair_iptm_from_pae',                ptm_symm(chain_pair_reduce(iptm_from_pae, chain_ids, pae))),
+        ('chain_pair_actifptm_from_pae',            ptm_symm(chain_pair_reduce(actifptm_from_pae, chain_ids, contact_probs, pae))),
+        ('chain_pair_ipsae10',                      ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae))),
+        ('chain_pair_ipsae15',                      ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae))),
+        ('chain_pair_actifpsae',                    ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs, pae))),
+        ('chain_pair_actifpsae_8A',                 ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs * isin_8A, pae))),
+        ('chain_pair_contact_probs_max',            np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
     ])
     return scores
 
@@ -176,7 +158,7 @@ def read_summary_scores(path):
     pos = cols.index('chain_pair_iptm') + 1
     return merged[ cols[:pos] + list(custom.columns) + cols[pos:] ]
 
-def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
+def read_contact_probs(path, chain1, chain2):
     # contact_probs profile for chain1 residues by aggregating over chain2 residues using aggfunc
     pred = Predictions(path)
     scores = pred.read_summary_confidences()
@@ -187,6 +169,10 @@ def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
     chain_ids = np.asarray(js['token_chain_ids'])
     contact_probs = np.array(js['contact_probs'])
     block = contact_probs[ np.ix_(chain_ids == chain1, chain_ids == chain2) ]
+    return block
+
+def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
+    block = read_contact_probs(path, chain1, chain2)
     return aggfunc(block, axis=1)
 
 def read_model(path):
