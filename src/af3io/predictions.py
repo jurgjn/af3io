@@ -8,7 +8,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
-from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis
+from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2
 
 class Predictions:
     """
@@ -99,6 +99,10 @@ def pseudo_beta(res):
 def get_model_coords(struct):
     return np.asarray( [pseudo_beta(res).coord for res in struct.get_residues() ] )
 
+def get_model_bfactors(struct):
+    # pLDDT is stored as the B-factor of each atom in AlphaFold3 model.cif files
+    return np.asarray( [pseudo_beta(res).get_bfactor() for res in struct.get_residues() ] )
+
 def get_dist(struct):
     coords = get_model_coords(struct)
     dist = sp.spatial.distance.cdist(coords, coords)
@@ -123,8 +127,12 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     # PAE not symmetric, different across all models/samples
     pae = np.array(js['pae'])
 
-    # contact matrix based on model coordinates
-    isin_8A = get_dist(read_struct(pred, model_path)) <= 8
+    # contact matrix and pLDDT (B-factor) based on model coordinates
+    struct = read_struct(pred, model_path)
+    isin_8A = get_dist(struct) <= 8
+    plddt = get_model_bfactors(struct)
+    plddt_row = np.broadcast_to(plddt[:, None], pae.shape)
+    plddt_col = np.broadcast_to(plddt[None, :], pae.shape)
 
     # https://link.springer.com/article/10.1038/s44320-026-00189-7
     # expected_ipTM = -0.036255571 + 0.004470512*sqrt(aa_in_protein1 + aa_in_protein2)
@@ -143,6 +151,8 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
         ('chain_pair_lis',                          mean_symm(chain_pair_reduce(lis, chain_ids, pae))),
         ('chain_pair_lia',                          sum_symm(chain_pair_reduce(lia, chain_ids, pae))),
         ('chain_pair_ilis',                         mean_symm(chain_pair_reduce(ilis, chain_ids, isin_8A, pae))),
+        ('chain_pair_pdockq',                       ptm_symm(chain_pair_reduce(pdockq, chain_ids, isin_8A, plddt_row, plddt_col))),
+        ('chain_pair_pdockq2',                      ptm_symm(chain_pair_reduce(pdockq2, chain_ids, isin_8A, pae, plddt_row, plddt_col))),
         ('chain_pair_contact_probs_max',            np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
     ])
     return scores

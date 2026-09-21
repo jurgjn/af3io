@@ -5,6 +5,9 @@ References:
 - Original ColabFold actifpTM: https://github.com/sokrypton/ColabFold/blob/main/colabfold/alphafold/extra_ptm.py
 - Kuhlman-Lab AlphaFold3 implementation: https://github.com/Kuhlman-Lab/alphafold3
 - LIS/LIA/iLIS (Local Interaction Score): https://github.com/flyark/AFM-LIS
+- pDockQ: https://doi.org/10.1038/s41467-022-28865-w
+- pDockQ2: https://doi.org/10.1093/bioinformatics/btad424
+- pDockQ/pDockQ2 cutoffs/reference implementation: https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py
 """
 
 import itertools
@@ -36,6 +39,11 @@ def sum_symm(arr, decimals=0):
     # Symmetrise via the sum of both directions, as used for LIA/cLIA in https://github.com/flyark/AFM-LIS
     return np.round(arr + arr.T, decimals=decimals)
 
+def _pae_to_ptm(pae_block, d0):
+    # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/model/network/confidence_head.py#L303-L306
+    # substitute with pae, eq (7) of the ipSAE preprint
+    return 1.0 / (1 + np.square(pae_block) / np.square(d0))
+
 def _weighted_ptm_from_pae(weights_block, pae_block, num_tokens, d0_lower_bound=0):
     # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/model/network/confidence_head.py#L290-L297
     clipped_num_res = np.maximum(num_tokens, 19)
@@ -43,15 +51,13 @@ def _weighted_ptm_from_pae(weights_block, pae_block, num_tokens, d0_lower_bound=
         # https://doi.org/10.1101/2025.02.10.637595
         # > In the AlphaFold code, the minimum value is set to 19, since L=18 produces a negative number
         1.24 * (clipped_num_res - 15) ** (1.0 / 3) - 1.8,
-        # > use a minimum value of 1 for d0, since Yang and Skolnick did not test the fit for proteins shorter 
+        # > use a minimum value of 1 for d0, since Yang and Skolnick did not test the fit for proteins shorter
         # > than 30 amino acids (d0=1 for L~26.5), and the denominator in  Eq. 14 starts to blow up for values << 1.0,
         # > which may not be realistic or helpful
         d0_lower_bound
     )
 
-    # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/model/network/confidence_head.py#L303-L306
-    # substitute with pae, eq (7) of the ipSAE preprint
-    tm_adjusted_pae = 1.0 / (1 + np.square(pae_block) / np.square(d0))
+    tm_adjusted_pae = _pae_to_ptm(pae_block, d0)
 
     # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/model/confidences.py#L627-L631
     normed_residue_weights = weights_block / (
@@ -112,3 +118,31 @@ def ilis(contacts_block, pae_block, pae_cutoff=LIS_PAE_CUTOFF):
     mask = (transformed > 0) & contacts_block.astype(bool)
     clis = transformed[mask].sum() / (1e-8 + mask.sum())
     return np.sqrt(lis(pae_block, pae_cutoff) * clis)
+
+def _interface_mean_plddt(contacts_block, plddt_row_block, plddt_col_block):
+    # Mean pLDDT over the union of chain_i/chain_j residues involved in >=1 contact
+    # https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py
+    plddt_i = plddt_row_block[:, 0][contacts_block.any(axis=1)]
+    plddt_j = plddt_col_block[0, :][contacts_block.any(axis=0)]
+    return np.concatenate([plddt_i, plddt_j]).mean()
+
+def pdockq(contacts_block, plddt_row_block, plddt_col_block):
+    # pDockQ: https://doi.org/10.1038/s41467-022-28865-w, via https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py
+    contacts_block = contacts_block.astype(bool)
+    npairs = contacts_block.sum()
+    if npairs == 0:
+        return 0.0
+    mean_plddt = _interface_mean_plddt(contacts_block, plddt_row_block, plddt_col_block)
+    x = mean_plddt * np.log10(npairs)
+    return 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
+
+def pdockq2(contacts_block, pae_block, plddt_row_block, plddt_col_block):
+    # pDockQ2: https://doi.org/10.1093/bioinformatics/btad424, via https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py
+    contacts_block = contacts_block.astype(bool)
+    npairs = contacts_block.sum()
+    if npairs == 0:
+        return 0.0
+    mean_plddt = _interface_mean_plddt(contacts_block, plddt_row_block, plddt_col_block)
+    mean_ptm = _pae_to_ptm(pae_block, 10.0)[contacts_block].mean()
+    x = mean_plddt * mean_ptm
+    return 1.31 / (1 + np.exp(-0.075 * (x - 84.733))) + 0.005
