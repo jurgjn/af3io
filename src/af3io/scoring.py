@@ -8,6 +8,7 @@ References:
 - pDockQ: https://doi.org/10.1038/s41467-022-28865-w
 - pDockQ2: https://doi.org/10.1093/bioinformatics/btad424
 - pDockQ/pDockQ2 cutoffs/reference implementation: https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py
+- Pinc: https://doi.org/10.1002/pro.70760, reference implementation: https://git.mpi-cbg.de/tothpetroczylab/Pinc
 """
 
 import itertools
@@ -146,3 +147,41 @@ def pdockq2(contacts_block, pae_block, plddt_row_block, plddt_col_block):
     mean_ptm = _pae_to_ptm(pae_block, 10.0)[contacts_block].mean()
     x = mean_plddt * mean_ptm
     return 1.31 / (1 + np.exp(-0.075 * (x - 84.733))) + 0.005
+
+def iplddt(contacts_block, plddt_row_block, plddt_col_block):
+    # Interface pLDDT: mean pLDDT over interface residues, without pDockQ's sigmoid/log-contact transform
+    contacts_block = contacts_block.astype(bool)
+    if contacts_block.sum() == 0:
+        return 0.0
+    return _interface_mean_plddt(contacts_block, plddt_row_block, plddt_col_block)
+
+# https://doi.org/10.1002/pro.70760 fixes the contact radius (both spheres) at 12 (A)
+PINC_CONTACT_RADIUS = 12.0
+
+def _sphere_vol(r):
+    return (4.0 / 3.0) * np.pi * r**3
+
+def _sphere_intersect_vol(Ru, D, rc):
+    # Volume of intersection between an uncertainty sphere (radius Ru, from PAE) and a fixed contact
+    # sphere (radius rc), with centres D apart. https://mathworld.wolfram.com/Sphere-SphereIntersection.html
+    D = np.maximum(D, 1e-8)
+    lens = np.pi * np.square(rc + Ru - D) * (
+        np.square(D) + 2 * D * (Ru + rc) - 3 * np.square(Ru - rc)
+    ) / (12.0 * D)
+    contained = _sphere_vol(np.minimum(rc, Ru))
+    vol = np.where(D >= rc + Ru, 0.0, np.where(D <= np.abs(rc - Ru), contained, lens))
+    return np.maximum(vol, 0.0)
+
+def _pinc_contact_prob(pae_block, dist_block, contact_radius):
+    # https://git.mpi-cbg.de/tothpetroczylab/Pinc: intersection(uncertainty sphere, contact sphere) / uncertainty sphere volume
+    pae_safe = np.maximum(pae_block, 1e-8)
+    p = _sphere_intersect_vol(pae_safe, dist_block, contact_radius) / _sphere_vol(pae_safe)
+    return np.clip(np.where(pae_block > 0, p, 0.0), 0.0, 1.0)
+
+def pinc(pae_block, dist_block, contact_radius=PINC_CONTACT_RADIUS):
+    # Pinc: https://doi.org/10.1002/pro.70760, via https://git.mpi-cbg.de/tothpetroczylab/Pinc
+    # dist_block: mass-weighted centre-of-mass distances between residues (see get_com_dist in predictions.py)
+    mask = dist_block < contact_radius
+    if mask.sum() == 0:
+        return 0.0
+    return _pinc_contact_prob(pae_block, dist_block, contact_radius)[mask].mean()

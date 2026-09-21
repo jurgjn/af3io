@@ -8,7 +8,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
-from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2
+from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
     """
@@ -108,6 +108,23 @@ def get_dist(struct):
     dist = sp.spatial.distance.cdist(coords, coords)
     return dist
 
+# https://git.mpi-cbg.de/tothpetroczylab/Pinc: heavy-atom masses (Da) for residue centre-of-mass, unlisted elements default to carbon
+ATOMIC_MASS = {'S': 32.0650, 'P': 30.9738, 'O': 15.9994, 'N': 14.0067}
+
+def get_model_com_coords(struct):
+    # Mass-weighted centre of mass over heavy atoms per residue, as used by https://git.mpi-cbg.de/tothpetroczylab/Pinc
+    def com(res):
+        atoms = [a for a in res if a.element != 'H']
+        masses = np.array([ATOMIC_MASS.get(a.element, 12.0107) for a in atoms])
+        coords = np.array([a.coord for a in atoms])
+        return np.average(coords, axis=0, weights=masses)
+    return np.asarray( [com(res) for res in struct.get_residues() ] )
+
+def get_com_dist(struct):
+    coords = get_model_com_coords(struct)
+    dist = sp.spatial.distance.cdist(coords, coords)
+    return dist
+
 def read_struct(pred, model_path):
     with pred.open(model_path) as fh_model:
         model_name = Path(model_path).stem
@@ -127,9 +144,10 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     # PAE not symmetric, different across all models/samples
     pae = np.array(js['pae'])
 
-    # contact matrix and pLDDT (B-factor) based on model coordinates
+    # contact matrix, pLDDT (B-factor), and centre-of-mass distances based on model coordinates
     struct = read_struct(pred, model_path)
     isin_8A = get_dist(struct) <= 8
+    dist_com = get_com_dist(struct)
     plddt = get_model_bfactors(struct)
     plddt_row = np.broadcast_to(plddt[:, None], pae.shape)
     plddt_col = np.broadcast_to(plddt[None, :], pae.shape)
@@ -153,6 +171,8 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
         ('chain_pair_ilis',                         mean_symm(chain_pair_reduce(ilis, chain_ids, isin_8A, pae))),
         ('chain_pair_pdockq',                       ptm_symm(chain_pair_reduce(pdockq, chain_ids, isin_8A, plddt_row, plddt_col))),
         ('chain_pair_pdockq2',                      ptm_symm(chain_pair_reduce(pdockq2, chain_ids, isin_8A, pae, plddt_row, plddt_col))),
+        ('chain_pair_iplddt',                       ptm_symm(chain_pair_reduce(iplddt, chain_ids, isin_8A, plddt_row, plddt_col))),
+        ('chain_pair_pinc',                         mean_symm(chain_pair_reduce(pinc, chain_ids, pae, dist_com))),
         ('chain_pair_contact_probs_max',            np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
     ])
     return scores
