@@ -21,6 +21,9 @@ dependencies = [
   "biopython",
 ]
 
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
+
 [project.scripts]
 af3io = "af3io.cli:cli"
 
@@ -31,3 +34,6 @@ changelog = "https://github.com/jurgjn/af3io/blob/main/CHANGELOG.md"
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.coverage.run]
+source = ["af3io"]
