@@ -165,7 +165,7 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
         ('chain_pair_ipsae10',                      ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae))),
         ('chain_pair_ipsae15',                      ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae))),
         ('chain_pair_actifpsae',                    ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs, pae))),
-        ('chain_pair_actifpsae_8A',                 ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs * isin_8A, pae))),
+        ('chain_pair_reactifptm',                   ptm_symm(chain_pair_reduce(reactifptm, chain_ids, isin_8A, pae))),
         ('chain_pair_lis',                          mean_symm(chain_pair_reduce(lis, chain_ids, pae))),
         ('chain_pair_lia',                          sum_symm(chain_pair_reduce(lia, chain_ids, pae))),
         ('chain_pair_ilis',                         mean_symm(chain_pair_reduce(ilis, chain_ids, isin_8A, pae))),
