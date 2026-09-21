@@ -1,8 +1,9 @@
 
 # pytest --capture=no --disable-warnings
 
-import collections, hashlib, os
-import click, click.testing, pytest, af3io, af3io.cli
+import collections, functools, hashlib, os, runpy, sys
+import click, click.testing, numpy as np, pytest, af3io, af3io.cli
+import af3io.scoring
 
 def md5sum(file):
     return hashlib.md5(open(file, 'rb').read()).hexdigest()
@@ -179,3 +180,70 @@ def test_data_fill_protein_only_unchanged(tmp_path):
     assert seq_fields['pairedMsa'] == ''
     assert seq_fields['templates'] == []
     assert 'dataPath' not in seq_fields
+
+# Real AlphaFold3 example (AURKA + TPX2, PDB-derived) distributed with the ipSAE reference
+# implementation; pinned to a commit so the fixture and its published reference numbers
+# (https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt)
+# stay in sync: ipSAE=0.448952/0.866498 (A->B/B->A), pDockQ=0.5235, pDockQ2=0.7120/0.6278
+IPSAE_COMMIT = '6174cf9e71cb1bd660cc805856a18c4871a6dec3'
+IPSAE_RAW = f'https://raw.githubusercontent.com/DunbrackLab/IPSAE/{IPSAE_COMMIT}'
+
+@pytest.fixture(scope='session')
+def ipsae_example_dir(tmp_path_factory):
+    tmpdir = tmp_path_factory.mktemp('ipsae_example')
+    for fn in ['ipsae.py', 'Example/fold_aurka_0_tpx2_0_full_data_0.json', 'Example/fold_aurka_0_tpx2_0_model_0.cif']:
+        dest = tmpdir / os.path.basename(fn)
+        os.system(f'curl -s -o {dest} {IPSAE_RAW}/{fn}')
+    return tmpdir
+
+@pytest.fixture(scope='session')
+def ipsae_reference(ipsae_example_dir):
+    """ Run the published ipsae.py on the example AF3 prediction to get its internal, per-residue
+    arrays (chains/pae_matrix/distances/cb_plddt) and its own computed scores. AlphaFold3 tokenises
+    modified residues (e.g. the two phosphothreonines here) and ligands atom-by-atom; ipsae.py
+    collapses these down to one token per real polymer residue (dropping ligand chains), which
+    af3io.scoring's chain_pair_reduce does not do on its own -- so its arrays, rather than the raw
+    full_data.json tokens, are the correct like-for-like input to compare af3io's scoring functions
+    against the published per-chain-pair values.
+    """
+    json_path = str(ipsae_example_dir / 'fold_aurka_0_tpx2_0_full_data_0.json')
+    cif_path = str(ipsae_example_dir / 'fold_aurka_0_tpx2_0_model_0.cif')
+    saved_argv = sys.argv
+    try:
+        sys.argv = ['ipsae.py', json_path, cif_path, '10', '10']
+        return runpy.run_path(str(ipsae_example_dir / 'ipsae.py'), run_name='ipsae_reference')
+    finally:
+        sys.argv = saved_argv
+
+def test_ipsae_literature(ipsae_reference):
+    # https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt
+    chains, pae_matrix = ipsae_reference['chains'], ipsae_reference['pae_matrix']
+    ipsae_mat = af3io.scoring.chain_pair_reduce(functools.partial(af3io.scoring.ipsae, pae_cutoff=10), chains, pae_matrix)
+    assert ipsae_mat[0, 1] == pytest.approx(0.448952, abs=1e-5)  # A -> B, asym
+    assert ipsae_mat[1, 0] == pytest.approx(0.866498, abs=1e-5)  # B -> A, asym
+    assert af3io.scoring.ptm_symm(ipsae_mat)[0, 1] == pytest.approx(0.866498, abs=1e-3)  # max
+
+def test_lis_literature(ipsae_reference):
+    # LIS isn't stable across ipsae.py versions (unlike ipSAE/pDockQ/pDockQ2 above), so compare
+    # against ipsae.py's own LIS computation on this pinned commit rather than a hardcoded literature value
+    chains, pae_matrix = ipsae_reference['chains'], ipsae_reference['pae_matrix']
+    lis_mat = af3io.scoring.chain_pair_reduce(af3io.scoring.lis, chains, pae_matrix)
+    assert lis_mat[0, 1] == pytest.approx(ipsae_reference['LIS']['A']['B'], abs=1e-6)
+    assert lis_mat[1, 0] == pytest.approx(ipsae_reference['LIS']['B']['A'], abs=1e-6)
+
+def test_pdockq_pdockq2_literature(ipsae_reference):
+    # https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt
+    chains, pae_matrix = ipsae_reference['chains'], ipsae_reference['pae_matrix']
+    distances, cb_plddt = ipsae_reference['distances'], ipsae_reference['cb_plddt']
+    isin_8A = distances <= 8.0
+    plddt_row = np.broadcast_to(cb_plddt[:, None], pae_matrix.shape)
+    plddt_col = np.broadcast_to(cb_plddt[None, :], pae_matrix.shape)
+
+    pdockq_mat = af3io.scoring.chain_pair_reduce(af3io.scoring.pdockq, chains, isin_8A, plddt_row, plddt_col)
+    assert pdockq_mat[0, 1] == pytest.approx(0.5235, abs=1e-4)  # direction-independent
+    assert pdockq_mat[1, 0] == pytest.approx(0.5235, abs=1e-4)
+
+    pdockq2_mat = af3io.scoring.chain_pair_reduce(af3io.scoring.pdockq2, chains, isin_8A, pae_matrix, plddt_row, plddt_col)
+    assert pdockq2_mat[0, 1] == pytest.approx(0.7120, abs=1e-4)  # A -> B, asym
+    assert pdockq2_mat[1, 0] == pytest.approx(0.6278, abs=1e-4)  # B -> A, asym
+    assert af3io.scoring.ptm_symm(pdockq2_mat)[0, 1] == pytest.approx(0.7120, abs=1e-3)  # max
