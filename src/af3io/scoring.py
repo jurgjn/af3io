@@ -4,6 +4,7 @@ References:
 - ipSAE preprint: https://www.biorxiv.org/content/10.1101/2025.02.10.637595v2
 - Original ColabFold actifpTM: https://github.com/sokrypton/ColabFold/blob/main/colabfold/alphafold/extra_ptm.py
 - Kuhlman-Lab AlphaFold3 implementation: https://github.com/Kuhlman-Lab/alphafold3
+- LIS/LIA/iLIS (Local Interaction Score): https://github.com/flyark/AFM-LIS
 """
 
 import itertools
@@ -26,6 +27,14 @@ def ptm_symm(arr, decimals=3):
     # Symmetrise a pTM-like score, eq (11) from https://doi.org/10.1101/2025.02.10.637595
     arr_symm = np.maximum(arr, arr.T)
     return np.round(arr_symm, decimals=decimals)
+
+def mean_symm(arr, decimals=3):
+    # Symmetrise via the arithmetic mean of both directions, as used for LIS/cLIS in https://github.com/flyark/AFM-LIS
+    return np.round((arr + arr.T) / 2, decimals=decimals)
+
+def sum_symm(arr, decimals=0):
+    # Symmetrise via the sum of both directions, as used for LIA/cLIA in https://github.com/flyark/AFM-LIS
+    return np.round(arr + arr.T, decimals=decimals)
 
 def _weighted_ptm_from_pae(weights_block, pae_block, num_tokens, d0_lower_bound=0):
     # https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/model/network/confidence_head.py#L290-L297
@@ -74,3 +83,32 @@ def reactifptm(contacts_block, pae_block):
     # https://www.biorxiv.org/content/10.64898/2026.08.24.746624v1
     num_tokens = sum(pae_block.shape)
     return _weighted_ptm_from_pae(contacts_block, pae_block, num_tokens, d0_lower_bound=1)
+
+# https://github.com/flyark/AFM-LIS defines the confident interface as PAE <= 12 (A), unchanged for AlphaFold3
+LIS_PAE_CUTOFF = 12
+
+def _lis_transform(pae_block, pae_cutoff):
+    # https://github.com/flyark/AFM-LIS: 1 - PAE/cutoff for PAE < cutoff, else 0
+    transformed = np.zeros_like(pae_block, dtype=float)
+    mask = pae_block < pae_cutoff
+    transformed[mask] = 1.0 - pae_block[mask] / pae_cutoff
+    return transformed
+
+def lis(pae_block, pae_cutoff=LIS_PAE_CUTOFF):
+    # Local Interaction Score: https://github.com/flyark/AFM-LIS
+    transformed = _lis_transform(pae_block, pae_cutoff)
+    mask = transformed > 0
+    return transformed.sum() / (1e-8 + mask.sum())
+
+def lia(pae_block, pae_cutoff=LIS_PAE_CUTOFF):
+    # Local Interaction Area: count of token pairs with PAE < cutoff
+    # https://github.com/flyark/AFM-LIS
+    return np.sum(pae_block < pae_cutoff)
+
+def ilis(contacts_block, pae_block, pae_cutoff=LIS_PAE_CUTOFF):
+    # Integrated LIS: geometric mean of LIS and cLIS (LIS restricted to structural contacts_block)
+    # https://github.com/flyark/AFM-LIS
+    transformed = _lis_transform(pae_block, pae_cutoff)
+    mask = (transformed > 0) & contacts_block.astype(bool)
+    clis = transformed[mask].sum() / (1e-8 + mask.sum())
+    return np.sqrt(lis(pae_block, pae_cutoff) * clis)

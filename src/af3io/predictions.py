@@ -8,7 +8,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
-from .scoring import chain_pair_reduce, ptm_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm
+from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis
 
 class Predictions:
     """
@@ -140,6 +140,9 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
         ('chain_pair_ipsae15',                      ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae))),
         ('chain_pair_actifpsae',                    ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs, pae))),
         ('chain_pair_actifpsae_8A',                 ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs * isin_8A, pae))),
+        ('chain_pair_lis',                          mean_symm(chain_pair_reduce(lis, chain_ids, pae))),
+        ('chain_pair_lia',                          sum_symm(chain_pair_reduce(lia, chain_ids, pae))),
+        ('chain_pair_ilis',                         mean_symm(chain_pair_reduce(ilis, chain_ids, isin_8A, pae))),
         ('chain_pair_contact_probs_max',            np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
     ])
     return scores
