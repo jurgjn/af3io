@@ -61,6 +61,50 @@ def input_create(version, model_seed, type, id, sequence, json_path):
     click.echo(f'Write:\t{str(json_path.resolve())}')
     af3io.input.write(js=js, path=str(json_path.resolve()))
 
+@cli.command(short_help='Set name attribute of input JSONs from file name')
+@click.option('--check', is_flag=True, default=False,
+    help='Only report mismatches, exit with status 1 if any found.',
+)
+@click.argument('json_paths', nargs=-1, required=True, type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True, path_type=Path))
+def fixname(check, json_paths):
+    """Set the name attribute of input JSON(s) to match the file name.
+
+    The expected name is the file name without .json and without a trailing
+    _data (e.g. foo_data.json => foo). Files with a name that is not sanitised
+    for AlphaFold3 (alphanumeric lower case and -._) are reported and left
+    unchanged. Gzip-compressed files (.gz) are skipped.
+
+    Use --check to report mismatches without modifying any files.
+    """
+    n_checked, n_mismatched, n_unsanitised, n_skipped = 0, 0, 0, 0
+    for json_path in json_paths:
+        if json_path.suffix == '.gz':
+            click.echo(f'skip (gzip not supported): {json_path}')
+            n_skipped += 1
+            continue
+
+        n_checked += 1
+        name = json_path.name.removesuffix('.json').removesuffix('_data')
+        if name != af3io.input.sanitised_name(name):
+            click.echo(f'unsanitised: {json_path} (maybe try: {af3io.input.sanitised_name(name)})')
+            n_unsanitised += 1
+            continue
+
+        js = af3io.input.read(str(json_path))
+        if js.get('name') == name:
+            click.echo(f'ok: {json_path}')
+            continue
+
+        n_mismatched += 1
+        click.echo(f'{json_path}: {js.get('name')!r} -> {name!r}')
+        if not check:
+            js['name'] = name
+            af3io.input.write(js=js, path=str(json_path))
+
+    click.echo(f'{n_checked} checked, {n_mismatched} {'mismatched' if check else 'updated'}, {n_unsanitised} unsanitised, {n_skipped} skipped')
+    if check and (n_mismatched + n_unsanitised) > 0:
+        raise SystemExit(1)
+
 @cli.command(short_help='Copy data pipeline strings from existing output')
 @click.option('--write-index', is_flag=True, default=False,
     help='Write a sequence to data JSON lookup table.',

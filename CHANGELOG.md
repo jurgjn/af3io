@@ -1,6 +1,9 @@
 # Changelog
 This project adheres to **YY.MINOR.MICRO**-style [Calendar Versioning](https://calver.org/).
 
+## [26.1] - unreleased
+- Added `fixname` to set the `name` attribute of input JSONs from their file names
+
 ## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output
 - Use calendar versioning as af3io is an
