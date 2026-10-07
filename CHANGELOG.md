@@ -2,7 +2,11 @@
 This project adheres to **YY.MINOR.MICRO**-style [Calendar Versioning](https://calver.org/).
 
 ## [26.1] - unreleased
+- Require Python >= 3.13 (zstd support via built-in `compression.zstd` on 3.14, `backports.zstd` on 3.13)
 - Added `fixname` to set the `name` attribute of input JSONs from their file names
+- Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file
+- Added `af3io.archive` to traverse and read files inside nested archives (tar, zip) with optional compression (gzip, zstd); predictions can now be read from inside other archives, e.g. `pools_5k.tar::pools_5k_0040f80.zip`
+- Predictions can be read from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
 
 ## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output

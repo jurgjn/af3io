@@ -1,5 +1,5 @@
 
-import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, time, zipfile, warnings
+import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, sys, time, zipfile, warnings
 import click, humanfriendly, numpy as np, zarr
 import af3io
 from pathlib import Path
@@ -322,3 +322,54 @@ def confidences_show(confidences_json):
         token_chain_ids = af3io.confidences.repeating_encode(js['token_chain_ids']),
         token_res_ids = af3io.confidences.increasing_encode(js['token_res_ids']),
     ))
+
+@cli.command(short_help='Collect summary scores from predictions')
+@click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
+@click.argument('predictions', nargs=-1, required=True, type=click.Path(exists=True, file_okay=True, dir_okay=True, path_type=Path))
+@click.argument('output_parquet', type=click.Path(file_okay=True, dir_okay=False, writable=True, allow_dash=True, path_type=Path))
+def summary_confidences(jobs, predictions, output_parquet):
+    """Read summary confidences and custom interface scores (ipSAE, LIS,
+    pDockQ, ...) from predictions, and write them as a single table to
+    OUTPUT_PARQUET.
+
+    A prediction is the AlphaFold 3 output directory of a single job, either
+    as-is or compressed as a zip file. Individual files in it can be compressed
+    (gzip, zstd), e.g. <name>/<name>_confidences.json.gz.
+
+    Each of PREDICTIONS can be a single prediction, a directory, or an archive
+    of predictions. Directories and archives are searched recursively, including
+    nested archives (tar, zip) with optional compression (gzip, zstd), e.g.
+    pools_5k.tar containing one zip file per prediction. Predictions inside
+    archives are listed in the predictions_path column as
+    pools_5k.tar::pools_5k_0040f80.zip (see af3io.archive). Paths in the
+    predictions_path column are relative to the current directory.
+
+    If OUTPUT_PARQUET is -, write the table to stdout as tab-separated text
+    instead. Progress messages are written to stderr.
+
+    Prefer uncompressed tar files as compressed tar files (.tar.gz, .tar.zst)
+    have to be re-read from the start for every prediction.
+    """
+    import concurrent.futures, multiprocessing, pandas as pd
+    time_start = time.monotonic()
+    if jobs is None:
+        jobs = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
+    click.echo(f'Using {jobs} worker processes ({os.cpu_count()} CPUs on this machine)', err=True)
+    prediction_paths = [ prediction_path for path in predictions for prediction_path in af3io.predictions.find_predictions(path.absolute()) ]
+    click.echo(f'{len(prediction_paths)} predictions found', err=True)
+    if len(prediction_paths) == 0:
+        raise click.UsageError(f'No predictions found in {", ".join(map(str, predictions))}')
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context('forkserver')) as executor:
+        futures = [ executor.submit(af3io.predictions.read_summary_scores, path) for path in prediction_paths ]
+        with click.progressbar(concurrent.futures.as_completed(futures), length=len(futures), label='Reading predictions', show_pos=True, file=sys.stderr) as bar:
+            for _ in bar:
+                pass
+        summary_confidences = pd.concat([ future.result() for future in futures ], axis=0).reset_index(drop=True)
+    summary_confidences['predictions_path'] = summary_confidences['predictions_path'].map(af3io.archive.relpath)
+    if str(output_parquet) == '-':
+        click.echo(summary_confidences.to_csv(sep='\t', index=False), nl=False)
+    else:
+        summary_confidences.to_parquet(output_parquet, compression='zstd')
+        click.echo(f'Write:\t{output_parquet} ({len(summary_confidences)} rows)', err=True)
+    click.echo(f'Finished in {humanfriendly.format_timespan(time.monotonic() - time_start)}', err=True)

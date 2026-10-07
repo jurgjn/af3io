@@ -1,36 +1,48 @@
 
 import collections, contextlib, functools, glob, gzip, itertools, io, json, math, os, re, zipfile
 from pprint import pprint
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import numpy as np, scipy as sp, pandas as pd
 import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
+from . import archive
 from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
     """
-        Read AlphaFold3 predictions where the output directory from a single job has been compressed as a zip archive
+        Read AlphaFold3 predictions from the output directory of a single job, either as-is or compressed as a zip archive
         Handles the change in "file name layout" (introduced in ~b78e215) where every output file now starts with the AlphaFold 3 job name..
+        The zip archive can be nested in other archives and/or compressed, e.g. pools_5k.tar::pools_5k_0040f80.zip (see af3io.archive)
+        Individual output files can be compressed (.gz, .zst), e.g. pools_5k_0040f80/pools_5k_0040f80_confidences.json.gz
+        File paths (model_path, confidences_path, ...) always refer to uncompressed names relative to the parent of the output directory
     """
     def __init__(self, path):
-        # find/assign name (from path)
-        self.path = Path(path)
-        self.name = self.path.stem
+        # find/assign name (from path); nested locators are kept as strings as they're not valid file system paths
+        self.path = str(path) if archive.is_nested(path) else Path(path)
+        self._stack = contextlib.ExitStack()
+        if isinstance(self.path, Path) and self.path.is_dir():
+            self.name = self.path.absolute().name
+            self._zip = None
+            self.file_list = sorted(f'{self.name}/{Path(root, file).relative_to(self.path).as_posix()}' for root, dirs, files in os.walk(self.path) for file in files)
+        else:
+            self.name = PurePosixPath(archive.strip_compression(archive.split(path)[-1])).stem
+            self._zip = self._stack.enter_context(zipfile.ZipFile(self._stack.enter_context(archive.open(self.path, seekable=True))))
+            self.file_list = self._zip.namelist()
         #print('predictions - path:', self.path)
         #print('predictions - name:', self.name)
 
-        with zipfile.ZipFile(self.path) as fh_zip:
-            self.file_list = fh_zip.namelist()
+        # Uncompressed => stored file names, e.g. name/name_model.cif => name/name_model.cif.gz
+        self._stored_names = { archive.strip_compression(file): file for file in self.file_list }
 
         # Initial file name layout
-        if f'{self.name}/ranking_scores.csv' in self.file_list:
+        if f'{self.name}/ranking_scores.csv' in self._stored_names:
             self.ranking_scores_path = f'{self.name}/ranking_scores.csv'
             self._file_layout = 0
         # Changed around b78e215; every file except TERMS_OF_USE.md now starts with the job name
-        elif f'{self.name}/{self.name}_ranking_scores.csv' in self.file_list:
+        elif f'{self.name}/{self.name}_ranking_scores.csv' in self._stored_names:
             self.ranking_scores_path = f'{self.name}/{self.name}_ranking_scores.csv'
             self._file_layout = 1
         # Fail if this changes again..
@@ -57,16 +69,28 @@ class Predictions:
         else:
             assert False
 
+    def close(self):
+        self._stack.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+
     @contextlib.contextmanager
     def open(self, file):
-        with zipfile.ZipFile(self.path) as fh_zip:
-            with fh_zip.open(file) as fh:
-                yield fh
+        stored_name = self._stored_names[file]
+        if self._zip is not None:
+            fh_stored = self._zip.open(stored_name)
+        else:
+            fh_stored = open(self.path / PurePosixPath(stored_name).relative_to(self.name), 'rb')
+        with fh_stored, archive.decompress(fh_stored, stored_name) as fh:
+            yield fh
 
     def _read(self, file):
-        with zipfile.ZipFile(self.path) as fh_zip:
-            with fh_zip.open(file) as fh:
-                return io.BytesIO(fh.read())
+        with self.open(file) as fh:
+            return io.BytesIO(fh.read())
 
     def read_summary_confidences(self):
         def parse_(path):
@@ -88,8 +112,34 @@ class Predictions:
 
 def read_summary_confidences(path):
     # Wrapper to "just get the iptm scores"
-    p = Predictions(path)
-    return p.read_summary_confidences()
+    with Predictions(path) as p:
+        return p.read_summary_confidences()
+
+def _is_ranking_scores(path):
+    # <name>/ranking_scores.csv (initial file name layout) or <name>/<name>_ranking_scores.csv, optionally compressed
+    path = PurePosixPath(archive.strip_compression(path))
+    return path.name in ('ranking_scores.csv', f'{path.parent.name}_ranking_scores.csv')
+
+def find_predictions(path):
+    """Yield paths/locators of predictions under path, which can be a directory, a single prediction, or a
+    (nested) archive of predictions, e.g. a tar file of zip files (see af3io.archive). A prediction is either
+    a zip file with a top-level <name>/<name>_ranking_scores.csv, or a directory <name> on disk with a
+    <name>_ranking_scores.csv (individual files can be compressed, e.g. <name>_ranking_scores.csv.gz).
+    """
+    seen = set()
+    for locator in archive.walk(path):
+        *parents, member = archive.split(locator)
+        if len(parents) == 0: # file on disk
+            prediction = str(Path(member).parent) if _is_ranking_scores(member) and Path(member).parent.name != '' else None
+        elif len(PurePosixPath(member).parts) == 2 and _is_ranking_scores(member) \
+                and PurePosixPath(archive.strip_compression(parents[-1])).suffix.lower() == '.zip':
+            prediction = archive.join(*parents)
+        else:
+            prediction = None
+        if prediction is not None:
+            if prediction not in seen:
+                seen.add(prediction)
+                yield prediction
 
 def pseudo_beta(res):
     if res.get_resname() != 'GLY' and 'CB' in res:
@@ -178,9 +228,9 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     return scores
 
 def read_summary_scores(path):
-    pred = Predictions(path)
-    scores = pred.read_summary_confidences()
-    custom = pd.DataFrame( [* map(_get_metrics, itertools.repeat(pred), scores.confidences_path, scores.model_path, scores['chain_pair_iptm']) ] )
+    with Predictions(path) as pred:
+        scores = pred.read_summary_confidences()
+        custom = pd.DataFrame( [* map(_get_metrics, itertools.repeat(pred), scores.confidences_path, scores.model_path, scores['chain_pair_iptm']) ] )
     
     merged = pd.concat([scores, custom], axis=1)
     merged = merged.astype({'predictions_path': str})
@@ -193,11 +243,11 @@ def read_summary_scores(path):
 
 def read_contact_probs(path, chain1, chain2):
     # contact_probs profile for chain1 residues by aggregating over chain2 residues using aggfunc
-    pred = Predictions(path)
-    scores = pred.read_summary_confidences()
-    confidences_path = scores.head(1)['confidences_path'].squeeze()
-    with pred.open(confidences_path) as fh:
-        js = json.load(fh)
+    with Predictions(path) as pred:
+        scores = pred.read_summary_confidences()
+        confidences_path = scores.head(1)['confidences_path'].squeeze()
+        with pred.open(confidences_path) as fh:
+            js = json.load(fh)
 
     chain_ids = np.asarray(js['token_chain_ids'])
     contact_probs = np.array(js['contact_probs'])
@@ -210,7 +260,6 @@ def read_chain_contact_probs(path, chain1, chain2, aggfunc=np.max):
 
 def read_model(path):
     # Wrapper to "just get the top model"
-    p = Predictions(path)
-    with zipfile.ZipFile(p.path) as fh_zip:
-        with fh_zip.open(p.model_path) as fh:
+    with Predictions(path) as p:
+        with p.open(p.model_path) as fh:
             return fh.read().decode()

@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
   { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
@@ -19,6 +19,8 @@ dependencies = [
   "pandas",
   "zarr",
   "biopython",
+  "pyarrow",
+  "backports.zstd; python_version < '3.14'",
 ]
 
 [project.optional-dependencies]
