@@ -1,0 +1,6 @@
+# Test data fetched and cached by pooch (see test_af3io.py), format: <file name> <sha256> <url>
+# pools_5k_0040f80.zip is the first member of pools_5k.tar (34 GB), fetched as an HTTP range request (bytes 512-156910201)
+pools_5k_0040f80.zip sha256:b04c078a2e66afcd71731822b970e11f4b48f29a36bddd0e2cbe36141d1bf3b8 https://zenodo.org/records/16920556/files/pools_5k.tar?download=1
+ipsae/ipsae.py sha256:10cf9b08c68c91e06cb28526cf2026f47a3980c9048fd3226d13e3304eaf1c27 https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/ipsae.py
+ipsae/fold_aurka_0_tpx2_0_full_data_0.json sha256:419dba4195671c4f710f12441a1bce09211adbb4196ed788c8146c2a6f06ed49 https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_full_data_0.json
+ipsae/fold_aurka_0_tpx2_0_model_0.cif sha256:65d7aa6d739bad7dda4fa4ed48b2e95c7af2014ed43faa4300342c35725bd6ad https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_model_0.cif

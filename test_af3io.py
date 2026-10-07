@@ -7,19 +7,28 @@ try:
 except ImportError:
     from backports import zstd
 from pathlib import Path
-import click, click.testing, numpy as np, pandas as pd, pytest, af3io, af3io.cli
+import click, click.testing, numpy as np, pandas as pd, pooch, pytest, af3io, af3io.cli
 import af3io.scoring
 
 def md5sum(file):
     return hashlib.md5(open(file, 'rb').read()).hexdigest()
 
+# Test data is downloaded once and cached by pooch (default: ~/.cache/af3io-test-data, override with $AF3IO_TEST_DATA)
+TEST_DATA = pooch.create(path=pooch.os_cache('af3io-test-data'), base_url='', env='AF3IO_TEST_DATA')
+TEST_DATA.load_registry(Path(__file__).with_name('test_data_registry.txt'))
+TEST_DATA_DOWNLOADERS = {
+    'pools_5k_0040f80.zip': pooch.HTTPDownloader(headers={'Range': 'bytes=512-156910201'}, progressbar=False),
+}
+
+def fetch_test_data(fname, tmpdir):
+    # Symlink cached file into tmpdir as tests write output files next to their inputs
+    path = Path(tmpdir) / Path(fname).name
+    path.symlink_to(TEST_DATA.fetch(fname, downloader=TEST_DATA_DOWNLOADERS.get(fname)))
+    return path
+
 @pytest.fixture(scope='session')
 def downloaded_zip(tmp_path_factory):
-    tmpdir = tmp_path_factory.mktemp('af3io_data')
-    zip_path = tmpdir / 'pools_5k_0040f80.zip'
-    cmd = f'curl -s https://zenodo.org/records/16920556/files/pools_5k.tar?download=1 | tar -xC {tmpdir} -xf - --occurrence pools_5k_0040f80.zip'
-    os.system(cmd)
-    return zip_path
+    return fetch_test_data('pools_5k_0040f80.zip', tmp_path_factory.mktemp('af3io_data'))
 
 @pytest.fixture(scope='session')
 def example_predictions_zip(downloaded_zip):
@@ -230,15 +239,12 @@ def test_fixname_check(tmp_path):
 # implementation; pinned to a commit so the fixture and its published reference numbers
 # (https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt)
 # stay in sync: ipSAE=0.448952/0.866498 (A->B/B->A), pDockQ=0.5235, pDockQ2=0.7120/0.6278
-IPSAE_COMMIT = '6174cf9e71cb1bd660cc805856a18c4871a6dec3'
-IPSAE_RAW = f'https://raw.githubusercontent.com/DunbrackLab/IPSAE/{IPSAE_COMMIT}'
-
+# (commit 6174cf9e71cb1bd660cc805856a18c4871a6dec3, see test_data_registry.txt)
 @pytest.fixture(scope='session')
 def ipsae_example_dir(tmp_path_factory):
     tmpdir = tmp_path_factory.mktemp('ipsae_example')
-    for fn in ['ipsae.py', 'Example/fold_aurka_0_tpx2_0_full_data_0.json', 'Example/fold_aurka_0_tpx2_0_model_0.cif']:
-        dest = tmpdir / os.path.basename(fn)
-        os.system(f'curl -s -o {dest} {IPSAE_RAW}/{fn}')
+    for fname in ['ipsae/ipsae.py', 'ipsae/fold_aurka_0_tpx2_0_full_data_0.json', 'ipsae/fold_aurka_0_tpx2_0_model_0.cif']:
+        fetch_test_data(fname, tmpdir)
     return tmpdir
 
 @pytest.fixture(scope='session')
