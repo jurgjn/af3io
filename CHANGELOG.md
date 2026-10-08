@@ -1,7 +1,7 @@
 # Changelog
-This project adheres to **YY.MINOR.MICRO**-style [Calendar Versioning](https://calver.org/).
+This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calver.org/) (two-digit year, month without leading zero, micro release), e.g. 26.10 or 26.10.1. Releases up to 26.0 used YY.MINOR.MICRO.
 
-## [26.1] - unreleased
+## [26.10] - unreleased
 - Require Python >= 3.13 (zstd support via built-in `compression.zstd` on 3.14, `backports.zstd` on 3.13)
 - Added `fixname` to set the `name` attribute of input JSONs from their file names
 - Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file

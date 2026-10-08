@@ -1,6 +1,6 @@
 [project]
 name = "af3io"
-version = "26.1-dev"
+version = "26.10-dev"
 description = "Eclectic utilities for AlphaFold 3"
 readme = "README.md"
 authors = [
