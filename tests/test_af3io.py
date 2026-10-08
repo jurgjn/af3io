@@ -1,12 +1,12 @@
 
-# pytest --capture=no --disable-warnings
+# pytest tests/ --capture=no --disable-warnings
 
 import collections, functools, gzip, hashlib, io, os, runpy, sys, tarfile, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
     from backports import zstd
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import click, click.testing, numpy as np, pandas as pd, pooch, pytest, af3io, af3io.cli
 import af3io.scoring
 
@@ -14,32 +14,51 @@ def md5sum(file):
     return hashlib.md5(open(file, 'rb').read()).hexdigest()
 
 # Test data is downloaded once and cached by pooch (default: ~/.cache/af3io-test-data, override with $AF3IO_TEST_DATA)
-TEST_DATA = pooch.create(path=pooch.os_cache('af3io-test-data'), base_url='', env='AF3IO_TEST_DATA')
+TESTDATA_COMMIT = 'e950c090352e808262f3280a888dbe1271f53616' # https://github.com/jurgjn/af3io-testdata
+TEST_DATA = pooch.create(
+    path=pooch.os_cache('af3io-test-data'),
+    base_url=f'https://raw.githubusercontent.com/jurgjn/af3io-testdata/{TESTDATA_COMMIT}/',
+    env='AF3IO_TEST_DATA',
+)
 TEST_DATA.load_registry(Path(__file__).with_name('test_data_registry.txt'))
-TEST_DATA_DOWNLOADERS = {
-    'pools_5k_0040f80.zip': pooch.HTTPDownloader(headers={'Range': 'bytes=512-156910201'}, progressbar=False),
-}
 
 def fetch_test_data(fname, tmpdir):
     # Symlink cached file into tmpdir as tests write output files next to their inputs
     path = Path(tmpdir) / Path(fname).name
-    path.symlink_to(TEST_DATA.fetch(fname, downloader=TEST_DATA_DOWNLOADERS.get(fname)))
+    path.symlink_to(TEST_DATA.fetch(fname))
     return path
 
-@pytest.fixture(scope='session')
-def downloaded_zip(tmp_path_factory):
-    return fetch_test_data('pools_5k_0040f80.zip', tmp_path_factory.mktemp('af3io_data'))
+def fetch_test_dir(prefix):
+    # Fetch all files under prefix, return the (read-only) cached directory
+    for fname in TEST_DATA.registry:
+        if fname.startswith(prefix + '/'):
+            TEST_DATA.fetch(fname)
+    return Path(TEST_DATA.abspath) / prefix
 
 @pytest.fixture(scope='session')
-def example_predictions_zip(downloaded_zip):
-    return str(downloaded_zip)
+def example_predictions_dir():
+    # Pooled prediction (~5k tokens, protein only) as an output directory with every file compressed with zstd
+    return fetch_test_dir('mgen_pools_5k_top3/pools_5k_0040f80')
 
 @pytest.fixture(scope='session')
-def example_confidences_json(downloaded_zip):
-    zip_dir = downloaded_zip.parent
-    os.system(f'unzip -qo {downloaded_zip} pools_5k_0040f80/pools_5k_0040f80_confidences.json -d {zip_dir}')
-    fn = os.path.join(zip_dir, 'pools_5k_0040f80/pools_5k_0040f80_confidences.json')
-    return fn
+def example_zip(example_predictions_dir, tmp_path_factory):
+    # Same prediction as a plain zip archive (decompressed files)
+    zip_path = tmp_path_factory.mktemp('af3io_data') / 'pools_5k_0040f80.zip'
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+        for path in sorted(example_predictions_dir.rglob('*.zst')):
+            name = PurePosixPath('pools_5k_0040f80', path.relative_to(example_predictions_dir).as_posix()).with_suffix('')
+            zf.writestr(str(name), zstd.decompress(path.read_bytes()))
+    return zip_path
+
+@pytest.fixture(scope='session')
+def example_predictions_zip(example_zip):
+    return str(example_zip)
+
+@pytest.fixture(scope='session')
+def example_confidences_json(example_predictions_dir, tmp_path_factory):
+    path = tmp_path_factory.mktemp('af3io_confidences') / 'pools_5k_0040f80_confidences.json'
+    path.write_bytes(zstd.decompress((example_predictions_dir / 'pools_5k_0040f80_confidences.json.zst').read_bytes()))
+    return str(path)
 
 def test_confidences_compress_decompress(example_confidences_json):
     runner = click.testing.CliRunner()
@@ -59,71 +78,47 @@ def test_confidences_compress_decompress(example_confidences_json):
         md5_decompressed = md5sum(local_json + '.decompressed')
         assert md5_downloaded == md5_decompressed
 
+# AlphaFold 3 example inputs covering proteins, DNA, RNA, ligands (CCD codes, SMILES), ions, modifications, glycans
+ALPHAFOLD3_EXAMPLES = sorted(PurePosixPath(fname).stem for fname in TEST_DATA.registry if fname.startswith('alphafold3_examples/alphafold3_jsons/'))
+
 @pytest.fixture(scope='session')
-def example_data_json(downloaded_zip):
-    zip_dir = downloaded_zip.parent
-    os.system(f'unzip -qo {downloaded_zip} pools_5k_0040f80/pools_5k_0040f80_data.json -d {zip_dir}')
-    fn = os.path.join(zip_dir, 'pools_5k_0040f80/pools_5k_0040f80_data.json')
-    return fn
+def alphafold3_examples_data_dir(tmp_path_factory):
+    # Data pipeline output (_data.json.gz) of all examples with a pre-computed sequence index
+    data_dir = tmp_path_factory.mktemp('alphafold3_examples_data')
+    for name in ALPHAFOLD3_EXAMPLES:
+        fetch_test_data(f'alphafold3_examples/alphafold3_predictions/{name}/{name}_data.json.gz', data_dir)
+    result = click.testing.CliRunner().invoke(af3io.cli.data_fill, ['--data_dir', str(data_dir), '--write-index'])
+    assert result.exit_code == 0, result.output
+    assert (data_dir / '.af3io_data_index.json').is_file()
+    return data_dir
 
-def test_data_fill(example_data_json):
-    runner = click.testing.CliRunner()
-    with runner.isolated_filesystem():
-        data_dir = os.path.dirname(example_data_json)
+@pytest.mark.parametrize('name', ALPHAFOLD3_EXAMPLES)
+def test_data_fill(name, alphafold3_examples_data_dir, tmp_path):
+    """ Fill an AlphaFold 3 example input JSON with data pipeline output (looked up by sequence across all
+    examples), the result should be identical to the actual data pipeline output.
+    """
+    json_path = fetch_test_data(f'alphafold3_examples/alphafold3_jsons/{name}.json', tmp_path)
+    result = click.testing.CliRunner().invoke(af3io.cli.data_fill, [
+        '--data_dir', str(alphafold3_examples_data_dir),
+        '--json_path', str(json_path),
+        '--output_dir', str(tmp_path),
+    ])
+    assert result.exit_code == 0, result.output
+    data_json_expected = gzip.decompress((alphafold3_examples_data_dir / f'{name}_data.json.gz').read_bytes())
+    assert (tmp_path / f'{name}_data.json').read_bytes() == data_json_expected
 
-        # We need the original sequences to create monomer jsons
-        js = af3io.input.read(example_data_json)
-        sequences = []
-        for seq_type, seq_fields in af3io.input.iter_sequences(js):
-            sequences.append(seq_fields['sequence'])
-
-        # Create monomer input .json for every chain in the original pool
-        os.makedirs('monomer_jsons', exist_ok=True)
-        for i, seq in enumerate(sequences):
-            chain_id = list(af3io.input.enumerate_chains())[i+1] # Starting from B as in notebook
-            result = runner.invoke(af3io.cli.input_create, [f'monomer_jsons/chain_{chain_id.lower()}.json', '--sequence', seq])
-            assert result.exit_code == 0
-
-        # Copy data pipeline strings using af3io data-fill
-        os.makedirs('monomer_msas', exist_ok=True)
-        result = runner.invoke(af3io.cli.data_fill, [
-            '--data_dir', data_dir,
-            '--input_dir', 'monomer_jsons',
-            '--output_dir', 'monomer_msas'
-        ])
-        assert result.exit_code == 0
-
-        # Create "index" mapping available sequences to data pipeline .jsons
-        result = runner.invoke(af3io.cli.data_fill, [
-            '--data_dir', 'monomer_msas',
-            '--write-index'
-        ])
-        assert result.exit_code == 0
-        assert os.path.exists('monomer_msas/.af3io_data_index.json')
-
-        # Create multimer input file with sequences from the original pool
-        args = ['multimer_jsons/pools_5k_0040f80.json', '--model_seed', '4']
-        for i, seq in enumerate(sequences):
-            chain_id = list(af3io.input.enumerate_chains())[i+1]
-            args.extend(['--type', 'protein', '--id', chain_id, '--sequence', seq])
-
-        os.makedirs('multimer_jsons', exist_ok=True)
-        result = runner.invoke(af3io.cli.input_create, args)
-        assert result.exit_code == 0
-
-        # Then fill in data pipeline strings from the monomers
-        os.makedirs('multimer_msas', exist_ok=True)
-        result = runner.invoke(af3io.cli.data_fill, [
-            '--data_dir', 'monomer_msas',
-            '--json_path', 'multimer_jsons/pools_5k_0040f80.json',
-            '--output_dir', 'multimer_msas/'
-        ])
-        assert result.exit_code == 0
-
-        # The result should be equal to what was downloaded from zenodo
-        md5_original = md5sum(example_data_json)
-        md5_filled = md5sum('multimer_msas/pools_5k_0040f80_data.json')
-        assert md5_original == md5_filled
+def test_pipeline_sequence():
+    # modified_rna example: residues at modified positions are replaced by the parent nucleotide (OMG=>G, PSU=>U, 5MC=>C)
+    rna_mods = [{'modificationType': 'PSU', 'basePosition': 13}, {'modificationType': '5MC', 'basePosition': 18}, {'modificationType': 'OMG', 'basePosition': 4}]
+    assert af3io.residue_names.rna_sequence('GGCCCGAUAGCUCAGUCGGUAGAGC', rna_mods) == 'GGCGCGAUAGCUUAGUCCGUAGAGC'
+    assert af3io.residue_names.rna_sequence('GGCXT') == 'GGCNN' # unknown RNA residues
+    # Protein: phosphothreonine/-tyrosine (TPO/PTR) on T/Y are unchanged, unknown residues (e.g. selenocysteine U) => X
+    ptms = [{'ptmType': 'TPO', 'ptmPosition': 2}, {'ptmType': 'PTR', 'ptmPosition': 4}]
+    assert af3io.residue_names.protein_sequence('ATGYU', ptms) == 'ATGYX'
+    assert af3io.residue_names.protein_sequence('AAAA', ptms) == 'ATAY'
+    # DNA is written as-is by the data pipeline
+    dna = {'sequence': 'GATTACA', 'modifications': [{'modificationType': '5CM', 'basePosition': 1}]}
+    assert af3io.residue_names.pipeline_sequence('dna', dna) == 'GATTACA'
 
 def test_data_fill_dna_chain(tmp_path):
     """ DNA chains have no MSA and no templates in data pipeline output; filling
@@ -236,10 +231,9 @@ def test_fixname_check(tmp_path):
     assert result.exit_code == 0
 
 # Real AlphaFold3 example (AURKA + TPX2, PDB-derived) distributed with the ipSAE reference
-# implementation; pinned to a commit so the fixture and its published reference numbers
+# implementation; pinned to a commit (see test_data_registry.txt) so the fixture and its published reference numbers
 # (https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt)
 # stay in sync: ipSAE=0.448952/0.866498 (A->B/B->A), pDockQ=0.5235, pDockQ2=0.7120/0.6278
-# (commit 6174cf9e71cb1bd660cc805856a18c4871a6dec3, see test_data_registry.txt)
 @pytest.fixture(scope='session')
 def ipsae_example_dir(tmp_path_factory):
     tmpdir = tmp_path_factory.mktemp('ipsae_example')
@@ -376,18 +370,18 @@ def test_archive_walk_open(tmp_path):
             pass
 
 @pytest.fixture(scope='session')
-def example_predictions_tar(downloaded_zip, tmp_path_factory):
+def example_predictions_tar(example_zip, tmp_path_factory):
     # Tar file with the example prediction twice: in a sub-directory, and compressed with zstd
     tar_path = tmp_path_factory.mktemp('af3io_tar') / 'pools.tar'
-    data = downloaded_zip.read_bytes()
+    data = example_zip.read_bytes()
     tar_path.write_bytes(_tar_bytes({ 'dir/pools_5k_0040f80.zip': data, 'pools_5k_0040f80.zip.zst': zstd.compress(data) }))
     return tar_path
 
 @pytest.fixture(scope='session')
-def example_predictions_dirs(downloaded_zip, tmp_path_factory):
+def example_predictions_dirs(example_zip, tmp_path_factory):
     # Unpacked example prediction with every file compressed individually, once with gzip, once with zstd
     root = tmp_path_factory.mktemp('af3io_dirs')
-    with zipfile.ZipFile(downloaded_zip) as zf:
+    with zipfile.ZipFile(example_zip) as zf:
         for suffix, compress in [('.gz', functools.partial(gzip.compress, compresslevel=1)), ('.zst', zstd.compress)]:
             for info in zf.infolist():
                 if not info.is_dir():

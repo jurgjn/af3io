@@ -5,6 +5,7 @@ from pprint import pprint
 import click
 
 from . import input
+from .residue_names import pipeline_sequence
 
 def create_index(path):
     index_files = list(itertools.chain(
@@ -30,6 +31,7 @@ def create_index(path):
 
 def lookup(js, index, missing_dir=None):
     """ Match chains by sequence, set dataPath based on the index
+    Sequences are matched as written by the data pipeline, i.e. taking modifications into account (see residue_names)
     Note: this changes index by adding missing sequences with dataPath set to None
     This is to keep track of missing sequences already identified in earlier input JSON files 
     """
@@ -37,15 +39,16 @@ def lookup(js, index, missing_dir=None):
     for seq_type, seq_fields in input.iter_sequences(js):
         if 'sequence' not in seq_fields:
             continue
+        sequence = pipeline_sequence(seq_type, seq_fields)
         try:
             index_type = index.get(seq_type, {})
-            seq_fields['dataPath'] = index_type[ seq_fields['sequence'] ]
+            seq_fields['dataPath'] = index_type[ sequence ]
         except KeyError:
             if (missing_dir is not None):
                 # Write monomer JSON for missing sequence
                 js_missing = input.init()
                 js_missing['name'] = input.sanitised_name(f'{js["name"]}_{seq_fields["id"]}')
-                js_missing['sequences'].append(input.init_sequence(seq_type, seq_fields['id'], seq_fields['sequence']))
+                js_missing['sequences'].append(input.init_sequence(seq_type, seq_fields['id'], sequence))
                 path_missing = os.path.join(missing_dir, f"{js_missing['name']}.json")
                 click.echo(f'Write:\t{path_missing}')
                 input.write(js_missing, path_missing)
@@ -53,22 +56,27 @@ def lookup(js, index, missing_dir=None):
                 # Add missing sequence to index
                 if seq_type not in index:
                     index[seq_type] = {}
-                index[seq_type][ seq_fields['sequence'] ] = None
+                index[seq_type][ sequence ] = None
             else:
-                click.echo(f"Sequence not in data index: {seq_type}/{seq_fields['sequence']}")
+                click.echo(f"Sequence not in data index: {seq_type}/{sequence}")
                 raise
 
     return js
+
+# https://github.com/google-deepmind/alphafold3/blob/v3.0.4/src/alphafold3/common/folding_input.py (ProteinChain/RnaChain/DnaChain.to_dict)
+_CHAIN_FIELD_ORDER = ['id', 'sequence', 'modifications', 'unpairedMsa', 'pairedMsa', 'templates']
 
 def fill(js):
     js = copy.deepcopy(js)
     for seq_type, seq_fields in input.iter_sequences(js):
         if 'sequence' not in seq_fields or 'dataPath' not in seq_fields:
             continue
+        sequence = pipeline_sequence(seq_type, seq_fields)
         for seq_type_fill, seq_fields_fill in input.iter_sequences(input.read(seq_fields['dataPath'])):
-            if seq_type == seq_type_fill and seq_fields['sequence'] == seq_fields_fill.get('sequence'):
+            if seq_type == seq_type_fill and sequence == seq_fields_fill.get('sequence'):
                 click.echo(f'\tfill id={seq_fields["id"]} from id={seq_fields_fill["id"]} in {seq_fields["dataPath"]}')
-                seq_fields['modifications'] = []
+                seq_fields['sequence'] = sequence # as written by the data pipeline
+                seq_fields.setdefault('modifications', []) # keep modifications from the input, e.g. PTMs
                 # Which of these the cached record has depends on the chain
                 # type: protein has an MSA and templates, RNA has an MSA but no
                 # templates, DNA has neither. Copy whichever are present;
@@ -79,6 +87,12 @@ def fill(js):
                 if 'templates' in seq_fields_fill:
                     seq_fields['templates'] = seq_fields_fill['templates'].copy()
                 del seq_fields['dataPath']
+
+                # Order fields as in data pipeline output with remaining fields (e.g. description) last
+                other_fields = [ field for field in seq_fields if field not in _CHAIN_FIELD_ORDER ]
+                for field in [ *_CHAIN_FIELD_ORDER, *other_fields ]:
+                    if field in seq_fields:
+                        seq_fields.move_to_end(field)
 
     # Always set by the data pipeline; set here to get identical files
     if not('bondedAtomPairs' in js.keys()):

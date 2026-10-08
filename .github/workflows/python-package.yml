@@ -10,7 +10,7 @@ on:
     branches: [ "main" ]
 
 env:
-  AF3IO_TEST_DATA: ${{ github.workspace }}/.af3io-test-data # pooch cache for test data, see test_data_registry.txt
+  AF3IO_TEST_DATA: ${{ github.workspace }}/.af3io-test-data # pooch cache for test data, see tests/test_data_registry.txt
 
 jobs:
   build:
@@ -36,7 +36,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ github.workspace }}/.af3io-test-data
-        key: af3io-test-data-${{ hashFiles('test_data_registry.txt') }}
+        key: af3io-test-data-${{ hashFiles('tests/test_data_registry.txt') }}
         restore-keys: af3io-test-data-
     - name: Test with pytest
       run: |
@@ -64,7 +64,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ github.workspace }}/.af3io-test-data
-        key: af3io-test-data-${{ hashFiles('test_data_registry.txt') }}
+        key: af3io-test-data-${{ hashFiles('tests/test_data_registry.txt') }}
         restore-keys: af3io-test-data-
     - name: Run tests with coverage
       run: |

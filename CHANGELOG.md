@@ -7,6 +7,8 @@ This project adheres to **YY.MINOR.MICRO**-style [Calendar Versioning](https://c
 - Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file
 - Added `af3io.archive` to traverse and read files inside nested archives (tar, zip) with optional compression (gzip, zstd); predictions can now be read from inside other archives, e.g. `pools_5k.tar::pools_5k_0040f80.zip`
 - Predictions can be read from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
+- Fixed `data-fill` dropping chain modifications (e.g. PTMs, modified bases) from input JSONs, and order chain fields as in data pipeline output (description last)
+- `data-fill` matches protein/RNA chains by sequence as written by the data pipeline, i.e. taking modifications into account (`af3io.residue_names`, adapted from AlphaFold 3)
 
 ## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output
