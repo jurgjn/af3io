@@ -9,7 +9,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 import Bio, Bio.PDB
 
 from . import archive
-from .scoring import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2, iplddt, pinc
+from .scores import chain_pair_reduce, ptm_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, ilis, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
     """
@@ -224,6 +224,9 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
         ('chain_pair_iplddt',                       ptm_symm(chain_pair_reduce(iplddt, chain_ids, isin_8A, plddt_row, plddt_col))),
         ('chain_pair_pinc',                         mean_symm(chain_pair_reduce(pinc, chain_ids, pae, dist_com))),
         ('chain_pair_contact_probs_max',            np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
+        ('chain_pair_contact_probs_pow3',           np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 3), chain_ids, contact_probs, isin_8A), 6)),
+        ('chain_pair_contact_probs_pow6',           np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 6), chain_ids, contact_probs, isin_8A), 6)),
+        ('chain_pair_contact_probs_pow9',           np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 9), chain_ids, contact_probs, isin_8A), 6)),
     ])
     return scores
 

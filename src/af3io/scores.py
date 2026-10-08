@@ -27,16 +27,16 @@ def chain_pair_reduce(func, token_chain_ids, *arrs):
             out[i, j] = func(*blocks)
     return out
 
-def ptm_symm(arr, decimals=3):
+def ptm_symm(arr, decimals=6):
     # Symmetrise a pTM-like score, eq (11) from https://doi.org/10.1101/2025.02.10.637595
     arr_symm = np.maximum(arr, arr.T)
     return np.round(arr_symm, decimals=decimals)
 
-def mean_symm(arr, decimals=3):
+def mean_symm(arr, decimals=6):
     # Symmetrise via the arithmetic mean of both directions, as used for LIS/cLIS in https://github.com/flyark/AFM-LIS
     return np.round((arr + arr.T) / 2, decimals=decimals)
 
-def sum_symm(arr, decimals=0):
+def sum_symm(arr, decimals=6):
     # Symmetrise via the sum of both directions, as used for LIA/cLIA in https://github.com/flyark/AFM-LIS
     return np.round(arr + arr.T, decimals=decimals)
 
