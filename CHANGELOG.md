@@ -9,6 +9,8 @@ This project adheres to **YY.MINOR.MICRO**-style [Calendar Versioning](https://c
 - Predictions can be read from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
 - Fixed `data-fill` dropping chain modifications (e.g. PTMs, modified bases) from input JSONs, and order chain fields as in data pipeline output (description last)
 - `data-fill` matches protein/RNA chains by sequence as written by the data pipeline, i.e. taking modifications into account (`af3io.residue_names`, adapted from AlphaFold 3)
+- Added interface scores to `summary-confidences`: ipSAE min (`chain_pair_ipsae10_min`, `chain_pair_ipsae15_min`), pairwise model confidence (0.8 ipTM + 0.2 pTM of the chain pair from PAE; `chain_pair_model_confidence`, `chain_pair_model_confidence_corrected` with size-corrected ipTM), cLIS, cLIA, iLIA, and interface size (`chain_pair_n_contacts`, `chain_pair_n_interface_residues`)
+- LIS family (LIS, cLIS, iLIS, LIA, cLIA, iLIA) matches the AFM-LIS reference implementation exactly: PAE <= 12 (A) is confident (was < 12), and iLIS is the geometric mean of symmetrised LIS and cLIS (was the mean of per-direction iLIS)
 
 ## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output

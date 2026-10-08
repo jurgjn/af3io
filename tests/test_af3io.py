@@ -1,7 +1,7 @@
 
 # pytest tests/ --capture=no --disable-warnings
 
-import collections, functools, gzip, hashlib, io, os, runpy, sys, tarfile, zipfile
+import collections, functools, gzip, hashlib, importlib.util, io, json, os, runpy, sys, tarfile, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
@@ -267,14 +267,79 @@ def test_ipsae_literature(ipsae_reference):
     assert ipsae_mat[0, 1] == pytest.approx(0.448952, abs=1e-5)  # A -> B, asym
     assert ipsae_mat[1, 0] == pytest.approx(0.866498, abs=1e-5)  # B -> A, asym
     assert af3io.scores.ptm_symm(ipsae_mat)[0, 1] == pytest.approx(0.866498, abs=1e-3)  # max
+    assert af3io.scores.min_symm(ipsae_mat)[0, 1] == pytest.approx(0.448952, abs=1e-3)  # min
 
-def test_lis_literature(ipsae_reference):
-    # LIS isn't stable across ipsae.py versions (unlike ipSAE/pDockQ/pDockQ2 above), so compare
-    # against ipsae.py's own LIS computation on this pinned commit rather than a hardcoded literature value
-    chains, pae_matrix = ipsae_reference['chains'], ipsae_reference['pae_matrix']
-    lis_mat = af3io.scores.chain_pair_reduce(af3io.scores.lis, chains, pae_matrix)
-    assert lis_mat[0, 1] == pytest.approx(ipsae_reference['LIS']['A']['B'], abs=1e-6)
-    assert lis_mat[1, 0] == pytest.approx(ipsae_reference['LIS']['B']['A'], abs=1e-6)
+def test_interface_scores_synthetic():
+    # Two chains (A: 3 tokens, B: 2 tokens); the A/B interface is a confident contact (A3-B1, PAE 3),
+    # a confident non-contact (A2-B1, PAE 6) and an unconfident contact (A3-B2, PAE 20)
+    chains = np.array(['A', 'A', 'A', 'B', 'B'])
+    pae = np.full((5, 5), 30.0)
+    pae[:3, :3] = pae[3:, 3:] = 1.0
+    pae[2, 3] = pae[3, 2] = 3.0
+    pae[1, 3] = pae[3, 1] = 6.0
+    pae[2, 4] = pae[4, 2] = 20.0
+    contacts = np.zeros((5, 5), dtype=bool)
+    contacts[2, 3] = contacts[3, 2] = contacts[2, 4] = contacts[4, 2] = True
+
+    def ab(func, *arrs):
+        return af3io.scores.chain_pair_reduce(func, chains, *arrs)[0, 1]
+
+    # LIS transform: 1 - PAE/12 for PAE < 12; cLIS/cLIA only count confident contacts
+    assert ab(af3io.scores.lis, pae) == pytest.approx(((1 - 3/12) + (1 - 6/12)) / 2)
+    assert ab(af3io.scores.clis, contacts, pae) == pytest.approx(1 - 3/12)
+    assert ab(af3io.scores.lia, pae) == 2
+    assert ab(af3io.scores.clia, contacts, pae) == 1
+    lia_symm = af3io.scores.sum_symm(af3io.scores.chain_pair_reduce(af3io.scores.lia, chains, pae))
+    clia_symm = af3io.scores.sum_symm(af3io.scores.chain_pair_reduce(af3io.scores.clia, chains, contacts, pae))
+    assert af3io.scores.ilia(lia_symm, clia_symm)[0, 1] == pytest.approx(np.sqrt(4 * 2))
+
+    # As in AFM-LIS, PAE exactly at the cutoff is confident (counted by LIA) but contributes 0 to LIS
+    pae_cutoff = pae.copy()
+    pae_cutoff[0, 4] = 12.0
+    assert ab(af3io.scores.lia, pae_cutoff) == 3
+    assert ab(af3io.scores.lis, pae_cutoff) == pytest.approx(((1 - 3/12) + (1 - 6/12) + 0) / 3)
+
+    # Interface size: 2 contacting pairs, involving A3 and B1/B2
+    assert ab(af3io.scores.n_contacts, contacts) == 2
+    assert ab(af3io.scores.n_interface_residues, contacts) == 3
+
+    # Pair pTM over both chains (d0 from 5 tokens, clipped to 19), max over aligned tokens of the mean TM-transformed PAE
+    d0 = 1.24 * (19 - 15) ** (1/3) - 1.8
+    tm = 1 / (1 + (pae / d0) ** 2)
+    chain_pair_ptm = af3io.scores.chain_pair_ptm_from_pae(chains, pae)
+    assert chain_pair_ptm[0, 1] == chain_pair_ptm[1, 0] == pytest.approx(tm.mean(axis=1).max())
+    assert chain_pair_ptm[0, 0] == pytest.approx(tm[:3, :3].mean(axis=1).max())
+    assert af3io.scores.model_confidence(0.5, chain_pair_ptm)[0, 1] == pytest.approx(0.8 * 0.5 + 0.2 * chain_pair_ptm[0, 1])
+
+    # Symmetrisation
+    asym = np.array([[1.0, 0.2], [0.7, 1.0]])
+    assert af3io.scores.min_symm(asym)[0, 1] == af3io.scores.min_symm(asym)[1, 0] == 0.2
+    assert af3io.scores.ptm_symm(asym)[0, 1] == 0.7
+
+@pytest.fixture(scope='session')
+def afm_lis():
+    # AFM-LIS reference implementation (lis.py) imported as a module
+    spec = importlib.util.spec_from_file_location('afm_lis', TEST_DATA.fetch('afm-lis/lis.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def test_lis_afm_lis(afm_lis):
+    # LIS/cLIS/iLIS/LIA/cLIA/iLIA should match the AFM-LIS reference implementation for every model of a heterodimer
+    # prediction (barnase-barstar has PAE values of exactly 12.0, at the confident interface cutoff)
+    pred_dir = fetch_test_dir('alphafold3_examples/alphafold3_predictions/barnase_barstar')
+    df = af3io.predictions.read_summary_scores(pred_dir)
+    assert len(df) == 5
+    with af3io.predictions.Predictions(pred_dir) as pred:
+        for _, row in df.iterrows():
+            with pred.open(row['model_path']) as fh:
+                struct_text = fh.read().decode()
+            with pred.open(row['confidences_path']) as fh:
+                pae = np.array(json.load(fh)['pae'])
+            (expected,) = afm_lis.analyze_single_model(struct_text, pae, {}, 'cif', 'af3', row['confidences_path'], None)
+            assert (expected['ci'], expected['cj']) == ('A', 'B')
+            for col, key in [('lis', 'LIS'), ('clis', 'cLIS'), ('ilis', 'iLIS'), ('lia', 'LIA'), ('clia', 'cLIA'), ('ilia', 'iLIA')]:
+                assert row[f'chain_pair_{col}'][0][1] == pytest.approx(expected[key], abs=1e-6), (row['model_path'], col)
 
 def test_pdockq_pdockq2_literature(ipsae_reference):
     # https://github.com/DunbrackLab/IPSAE/blob/main/Example/fold_aurka_0_tpx2_0_model_0_10_10.txt
