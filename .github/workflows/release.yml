@@ -1,0 +1,86 @@
+# Release to PyPI when a version tag is pushed, e.g.:
+#   1. Set the release version in pyproject.toml (e.g. 26.10, without -dev) and date the CHANGELOG.md section
+#   2. git commit -m "Release v26.10" && git tag v26.10 && git push origin main v26.10
+# Publishing uses PyPI trusted publishing (no API token), configured at https://pypi.org/manage/project/af3io/settings/publishing/
+# with owner jurgjn, repository af3io, workflow release.yml, environment pypi
+
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+jobs:
+  tests:
+    uses: ./.github/workflows/python-package.yml
+    permissions:
+      contents: write # requested by the coverage job in python-package.yml (skipped for tags, but validated)
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.13"
+    - name: Check tag matches release version in pyproject.toml
+      run: |
+        python -m pip install packaging
+        python - <<'PY'
+        import os, sys, tomllib
+        from packaging.version import Version
+        tag = os.environ['GITHUB_REF_NAME']
+        version = Version(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])
+        if version.is_devrelease or version.is_prerelease:
+            sys.exit(f'pyproject.toml version {version} is not a release version')
+        if tag != f'v{version}':
+            sys.exit(f'Tag {tag} does not match pyproject.toml version {version} (expected v{version})')
+        print(f'Releasing {version}')
+        PY
+    - name: Build sdist and wheel
+      run: |
+        python -m pip install build twine
+        python -m build
+        python -m twine check --strict dist/*
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  publish:
+    needs: [ tests, build ]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/af3io/
+    permissions:
+      id-token: write # PyPI trusted publishing
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+    - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+    - name: Create GitHub release with notes from CHANGELOG.md
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Section of CHANGELOG.md for this version: from "## [<version>]" up to the next "## [" heading
+        awk -v version="${GITHUB_REF_NAME#v}" '
+          /^## \[/ { in_section = index($0, "## [" version "]") == 1; next }
+          in_section
+        ' CHANGELOG.md > notes.md
+        gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md

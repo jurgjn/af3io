@@ -8,6 +8,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_call: # run tests before releases, see release.yml
 
 env:
   AF3IO_TEST_DATA: ${{ github.workspace }}/.af3io-test-data # pooch cache for test data, see tests/test_data_registry.txt
