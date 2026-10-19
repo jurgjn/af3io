@@ -40,4 +40,14 @@ def test_summary_confidences_all(tmp_path):
     result = click.testing.CliRunner().invoke(af3io.cli.summary_confidences, [str(TEST_DATA.abspath), str(output_parquet)])
     assert result.exit_code == 0, result.output
     assert f'{len(PREDICTIONS)} predictions found' in result.output
-    assert len(pd.read_parquet(output_parquet)) == 5 * len(PREDICTIONS)
+    df = pd.read_parquet(output_parquet)
+    assert len(df) == 5 * len(PREDICTIONS)
+
+    # Scores written to parquet match those computed in memory (a protein-only and a mixed protein/DNA example)
+    for name in ['barnase_barstar', 'tetr_dimer_dna']:
+        expected = af3io.predictions.read_summary_scores(fetch_test_dir(f'alphafold3_examples/alphafold3_predictions/{name}'))
+        actual = df[df['name'] == name].reset_index(drop=True)
+        for col in expected.columns:
+            if col.startswith('chain_pair_'):
+                for value_actual, value_expected in zip(actual[col], expected[col]):
+                    np.testing.assert_array_equal(np.array([ list(row) for row in value_actual ], dtype=float), np.asarray(value_expected, dtype=float), err_msg=f'{name} {col}')
