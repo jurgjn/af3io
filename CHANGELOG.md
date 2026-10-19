@@ -1,16 +1,20 @@
 # Changelog
-This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calver.org/) (two-digit year, month without leading zero, micro release), e.g. 26.10 or 26.10.1. Releases up to 26.0 used YY.MINOR.MICRO.
+This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calver.org/), e.g. 26.10 or 26.10.1. 
 
 ## [26.10] - unreleased
-- Require Python >= 3.13 (zstd support via built-in `compression.zstd` on 3.14, `backports.zstd` on 3.13)
-- Added `fixname` to set the `name` attribute of input JSONs from their file names
+- Added reading predictions from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
 - Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file
 - Added `af3io.archive` to traverse and read files inside nested archives (tar, zip) with optional compression (gzip, zstd); predictions can now be read from inside other archives, e.g. `pools_5k.tar::pools_5k_0040f80.zip`
-- Predictions can be read from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
-- Fixed `data-fill` dropping chain modifications (e.g. PTMs, modified bases) from input JSONs, and order chain fields as in data pipeline output (description last)
-- `data-fill` matches protein/RNA chains by sequence as written by the data pipeline, i.e. taking modifications into account (`af3io.residue_names`, adapted from AlphaFold 3)
-- Added interface scores to `summary-confidences`: ipSAE min (`chain_pair_ipsae10_min`, `chain_pair_ipsae15_min`), pairwise model confidence (0.8 ipTM + 0.2 pTM of the chain pair from PAE; `chain_pair_model_confidence`, `chain_pair_model_confidence_corrected` with size-corrected ipTM), cLIS, cLIA, iLIA, and interface size (`chain_pair_n_contacts`, `chain_pair_n_interface_residues`)
-- LIS family (LIS, cLIS, iLIS, LIA, cLIA, iLIA) matches the AFM-LIS reference implementation exactly: PAE <= 12 (A) is confident (was < 12), and iLIS is the geometric mean of symmetrised LIS and cLIS (was the mean of per-direction iLIS)
+- Added interface scores per chain pair (`af3io.scores`) to `summary-confidences`
+- Added tests of interface scores against reference implementations
+- Added `data-dump` to extract MSAs (`.a3m`) and templates (`.cif`) from data pipeline output into separate files
+- Added `confidences-show` to show a compact summary of a confidences JSON
+- Added `fixname` to set the `name` attribute of input JSONs from their file names
+- Added publishing of tagged releases to PyPI
+- Changed `data-fill` to match protein/RNA chains by sequence as written by the data pipeline, i.e. taking modifications into account (`af3io.residue_names`, adapted from AlphaFold 3)
+- Changed minimum Python version to 3.13 (zstd support via built-in `compression.zstd` on 3.14, `backports.zstd` on 3.13)
+- Fixed `data-fill` dropping chain modifications (e.g. PTMs, modified bases) from input JSONs, and chain fields ordered differently from data pipeline output (description last)
+- Fixed `data-fill` failing on inputs with ligands (#3) or DNA chains (#4)
 
 ## [26.0] - 2026-02-01
 - Read inference results such as best structure or summary confidences from zip-compressed output
