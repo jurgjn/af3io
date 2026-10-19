@@ -1,5 +1,5 @@
-# Test data fetched and cached by pooch (see test_af3io.py), format: <file name> <sha256> [<url>]
-# Files without a url are from https://github.com/jurgjn/af3io-testdata (pinned to a commit, see TESTDATA_COMMIT in test_af3io.py)
+# Test data fetched and cached by pooch (see testdata.py), format: <file name> <sha256> [<url>]
+# Files without a url are from https://github.com/jurgjn/af3io-testdata (pinned to a commit, see TESTDATA_COMMIT in testdata.py)
 alphafold3_examples/alphafold3_jsons/barnase_barstar.json sha256:5fb6743c5777e4927fdf4afbdc94ef46644d254ae5741684553d5166eab00925
 alphafold3_examples/alphafold3_jsons/calmodulin_4calcium.json sha256:7ef1d5421a2c03dc4715ef5194bfb3d5bfc747cbf4e1ae267786cb661ba4480d
 alphafold3_examples/alphafold3_jsons/erk2_phosphorylated.json sha256:645c5e7bd95d839330b8154a1925a27d719e09d7822f9ff19e0ed456262c105b
