@@ -1,7 +1,7 @@
 # Changelog
 This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calver.org/), e.g. 26.10 or 26.10.1. 
 
-## [26.10] - unreleased
+## [26.10] - 2026-10-19
 - Added reading predictions from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
 - Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file
 - Added `af3io.archive` to traverse and read files inside nested archives (tar, zip) with optional compression (gzip, zstd); predictions can now be read from inside other archives, e.g. `pools_5k.tar::pools_5k_0040f80.zip`
@@ -12,6 +12,7 @@ This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calve
 - Added `fixname` to set the `name` attribute of input JSONs from their file names
 - Added publishing of tagged releases to PyPI
 - Changed `data-fill` to match protein/RNA chains by sequence as written by the data pipeline, i.e. taking modifications into account (`af3io.residue_names`, adapted from AlphaFold 3)
+- Changed license from CC BY-NC-SA 4.0 to Apache License 2.0 to match AlphaFold 3, enabling re-use of parts of its code for compatibility (e.g. `af3io.residue_names`)
 - Changed minimum Python version to 3.13 (zstd support via built-in `compression.zstd` on 3.14, `backports.zstd` on 3.13)
 - Fixed `data-fill` dropping chain modifications (e.g. PTMs, modified bases) from input JSONs, and chain fields ordered differently from data pipeline output (description last)
 - Fixed `data-fill` failing on inputs with ligands (#3) or DNA chains (#4)

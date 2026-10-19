@@ -1,8 +1,10 @@
 [project]
 name = "af3io"
-version = "26.10-dev"
+version = "26.10"
 description = "Eclectic utilities for AlphaFold 3"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
   { name = "jurgjn", email = "jurgjn@users.noreply.github.com" }
 ]
@@ -34,7 +36,7 @@ repository = "https://github.com/jurgjn/af3io"
 changelog = "https://github.com/jurgjn/af3io/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.coverage.run]
