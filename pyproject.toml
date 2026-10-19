@@ -46,3 +46,5 @@ source = ["af3io"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not long'"
+markers = ["long: slow tests or tests on larger data (tests/long/), run with pytest -m long"]
