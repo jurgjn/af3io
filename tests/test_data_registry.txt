@@ -66,9 +66,9 @@ alphafold3_examples/alphafold3_predictions/barnase_barstar/seed-42_sample-3/barn
 alphafold3_examples/alphafold3_predictions/barnase_barstar/seed-42_sample-4/barnase_barstar_seed-42_sample-4_confidences.json.gz sha256:0ffd0c5ba52d366b97d6f721aed2028a7857590e32555a48fa93b5318cbe834d
 alphafold3_examples/alphafold3_predictions/barnase_barstar/seed-42_sample-4/barnase_barstar_seed-42_sample-4_model.cif.gz sha256:6026361cd5e8ece0061a8a5aeb106feb8192a7753a652cde6135d626e9de6365
 alphafold3_examples/alphafold3_predictions/barnase_barstar/seed-42_sample-4/barnase_barstar_seed-42_sample-4_summary_confidences.json.gz sha256:c9531fefdbba12506fffc876f37f9a042a346294f4b4ae228a22142480690eff
-# AFM-LIS reference implementation (https://github.com/flyark/AFM-LIS, pinned to a commit)
-afm-lis/lis.py sha256:885bdb8e5182c2c1f9306ee7eae1c67c885bef1332c5df7016d9ab1876ece6b7 https://raw.githubusercontent.com/flyark/AFM-LIS/9921567e186e0caa14cdbcd6bc51b9b02b36e36d/lis.py
-# IPSAE reference implementation and example (https://github.com/DunbrackLab/IPSAE, pinned to a commit)
-ipsae/ipsae.py sha256:10cf9b08c68c91e06cb28526cf2026f47a3980c9048fd3226d13e3304eaf1c27 https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/ipsae.py
-ipsae/fold_aurka_0_tpx2_0_full_data_0.json sha256:419dba4195671c4f710f12441a1bce09211adbb4196ed788c8146c2a6f06ed49 https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_full_data_0.json
-ipsae/fold_aurka_0_tpx2_0_model_0.cif sha256:65d7aa6d739bad7dda4fa4ed48b2e95c7af2014ed43faa4300342c35725bd6ad https://raw.githubusercontent.com/DunbrackLab/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_model_0.cif
+# AFM-LIS reference implementation (https://github.com/flyark/AFM-LIS via fork jurgjn/AFM-LIS, pinned to a commit)
+afm-lis/lis.py sha256:885bdb8e5182c2c1f9306ee7eae1c67c885bef1332c5df7016d9ab1876ece6b7 https://raw.githubusercontent.com/jurgjn/AFM-LIS/9921567e186e0caa14cdbcd6bc51b9b02b36e36d/lis.py
+# IPSAE reference implementation and example (https://github.com/DunbrackLab/IPSAE via fork jurgjn/IPSAE, pinned to a commit)
+ipsae/ipsae.py sha256:10cf9b08c68c91e06cb28526cf2026f47a3980c9048fd3226d13e3304eaf1c27 https://raw.githubusercontent.com/jurgjn/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/ipsae.py
+ipsae/fold_aurka_0_tpx2_0_full_data_0.json sha256:419dba4195671c4f710f12441a1bce09211adbb4196ed788c8146c2a6f06ed49 https://raw.githubusercontent.com/jurgjn/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_full_data_0.json
+ipsae/fold_aurka_0_tpx2_0_model_0.cif sha256:65d7aa6d739bad7dda4fa4ed48b2e95c7af2014ed43faa4300342c35725bd6ad https://raw.githubusercontent.com/jurgjn/IPSAE/6174cf9e71cb1bd660cc805856a18c4871a6dec3/Example/fold_aurka_0_tpx2_0_model_0.cif
