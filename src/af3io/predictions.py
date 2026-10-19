@@ -8,7 +8,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
-from . import archive
+from . import archive, residue_names
 from .scores import chain_pair_reduce, chain_pair_ptm_from_pae, model_confidence, ptm_symm, min_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, clis, clia, ilis, ilia, n_contacts, n_interface_residues, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
@@ -141,17 +141,39 @@ def find_predictions(path):
                 seen.add(prediction)
                 yield prediction
 
-def pseudo_beta(res):
-    if res.get_resname() != 'GLY' and 'CB' in res:
-        return res['CB']
-    return res['CA'] if 'CA' in res else None
+# Residues represented by a single token in AlphaFold 3 (standard amino acids and nucleotides); any other residue
+# (ligands, ions, glycans, modified residues) is tokenised atom-by-atom
+STANDARD_RESIDUES = frozenset([
+    *residue_names.PROTEIN_COMMON_ONE_TO_THREE.values(), residue_names.UNK,
+    *residue_names.RNA_TYPES, residue_names.UNK_RNA,
+    residue_names.DA, residue_names.DG, residue_names.DC, residue_names.DT, residue_names.UNK_DNA,
+])
+
+def get_model_tokens(struct):
+    # Heavy atoms of each token, in the same order as the tokens in confidences.json (e.g. token_chain_ids)
+    tokens = []
+    for res in struct.get_residues():
+        atoms = [a for a in res if a.element != 'H']
+        if res.id[0] == ' ' and res.get_resname() in STANDARD_RESIDUES:
+            tokens.append(atoms)
+        else:
+            tokens.extend([a] for a in atoms)
+    return tokens
+
+def token_centre(atoms):
+    # Representative atom of a token: CB (CA for glycine) for amino acids, C3' for nucleotides (as in ipsae.py), the atom itself otherwise
+    by_name = {a.get_id(): a for a in atoms}
+    for name in ('CB', "C3'", 'CA'):
+        if name in by_name:
+            return by_name[name]
+    return atoms[0]
 
 def get_model_coords(struct):
-    return np.asarray( [pseudo_beta(res).coord for res in struct.get_residues() ] )
+    return np.asarray( [token_centre(atoms).coord for atoms in get_model_tokens(struct) ] )
 
 def get_model_bfactors(struct):
     # pLDDT is stored as the B-factor of each atom in AlphaFold3 model.cif files
-    return np.asarray( [pseudo_beta(res).get_bfactor() for res in struct.get_residues() ] )
+    return np.asarray( [token_centre(atoms).get_bfactor() for atoms in get_model_tokens(struct) ] )
 
 def get_dist(struct):
     coords = get_model_coords(struct)
@@ -162,13 +184,12 @@ def get_dist(struct):
 ATOMIC_MASS = {'S': 32.0650, 'P': 30.9738, 'O': 15.9994, 'N': 14.0067}
 
 def get_model_com_coords(struct):
-    # Mass-weighted centre of mass over heavy atoms per residue, as used by https://git.mpi-cbg.de/tothpetroczylab/Pinc
-    def com(res):
-        atoms = [a for a in res if a.element != 'H']
+    # Mass-weighted centre of mass over heavy atoms per token, as used by https://git.mpi-cbg.de/tothpetroczylab/Pinc
+    def com(atoms):
         masses = np.array([ATOMIC_MASS.get(a.element, 12.0107) for a in atoms])
         coords = np.array([a.coord for a in atoms])
         return np.average(coords, axis=0, weights=masses)
-    return np.asarray( [com(res) for res in struct.get_residues() ] )
+    return np.asarray( [com(atoms) for atoms in get_model_tokens(struct) ] )
 
 def get_com_dist(struct):
     coords = get_model_com_coords(struct)
@@ -184,7 +205,6 @@ def read_struct(pred, model_path):
         return struct[0]
 
 def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
-    # Assumes input is protein chains only..
     with pred.open(confidences_path) as fh:
         js = json.load(fh)
 
@@ -196,6 +216,7 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
 
     # contact matrix, pLDDT (B-factor), and centre-of-mass distances based on model coordinates
     struct = read_struct(pred, model_path)
+    assert len(get_model_tokens(struct)) == len(chain_ids), f'{model_path}: number of tokens differs from {confidences_path}'
     isin_8A = get_dist(struct) <= 8
     dist_com = get_com_dist(struct)
     plddt = get_model_bfactors(struct)
@@ -208,7 +229,9 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     chain_pair_lengths_sum = chain_lengths[:, None] + chain_lengths[None, :]
     chain_pair_iptm_expected = -0.036255571 + 0.004470512*np.sqrt(chain_pair_lengths_sum)
 
-    chain_pair_iptm_corrected = np.asarray(chain_pair_iptm) - chain_pair_iptm_expected
+    # AlphaFold 3 reports ipTM as null for some chain pairs (e.g. single-atom chains such as ions), use NaN
+    chain_pair_iptm = np.asarray(chain_pair_iptm, dtype=float)
+    chain_pair_iptm_corrected = chain_pair_iptm - chain_pair_iptm_expected
     chain_pair_ptm = chain_pair_ptm_from_pae(chain_ids, pae)
     chain_pair_ipsae10 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae)
     chain_pair_ipsae15 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae)

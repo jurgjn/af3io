@@ -1,6 +1,9 @@
 # Changelog
 This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calver.org/), e.g. 26.10 or 26.10.1. 
 
+## [Unreleased]
+- Fixed `summary-confidences` failing on predictions with ligands, ions, nucleic acids, glycans or modified residues: structure-based scores are now computed per AlphaFold 3 token, and ipTM reported as null is kept as NaN
+
 ## [26.10] - 2026-10-19
 - Added reading predictions from output directories as-is, and from output directories or zip files with individually compressed files (gzip, zstd)
 - Added `summary-confidences` to collect summary confidences and interface scores from predictions (output directories or zip files) into a single parquet file
