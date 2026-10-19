@@ -14,3 +14,6 @@ htmlcov/
 # Virtual environments
 .venv
 .af3io-test-data/
+
+# Apptainer containers (large binaries)
+*.sif
