@@ -4,7 +4,7 @@ From: ghcr.io/astral-sh/uv:0.12.17
 Stage: uv_stage
 
 Bootstrap: docker
-From: vllm/vllm-openai:latest-cu130
+From: nvidia/cuda:13.4.3-base-ubuntu26.04
 
 %files from uv_stage
     # https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
@@ -14,7 +14,7 @@ From: vllm/vllm-openai:latest-cu130
 
 %post
     export DEBIAN_FRONTEND=noninteractive
-    # build-essential, python3-dev needed for numba compilation such as pooled-ppi
+    # build-essential needed for numba compilation such as pooled-ppi
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
@@ -22,9 +22,6 @@ From: vllm/vllm-openai:latest-cu130
         fd-find \
         git \
         less \
-        python-is-python3 \
-        python3.13 \
-        python3.13-dev \
         ripgrep \
         squashfs-tools \
         zstd
@@ -45,6 +42,26 @@ From: vllm/vllm-openai:latest-cu130
     # https://github.com/earendil-works/pi/tree/main/packages/coding-agent#quick-start
     npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
+    # Python 3.13 (uv-managed, independent of the system Python) with af3io runtime + test dependencies
+    # (keep in sync with pyproject.toml); af3io itself is used from the mounted working copy
+    export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+    uv venv --python 3.13 /opt/venv
+    uv pip install --python /opt/venv/bin/python --no-cache \
+        click \
+        humanfriendly \
+        scipy \
+        pandas \
+        zarr \
+        biopython \
+        pyarrow \
+        backports.zstd \
+        pytest \
+        pytest-cov \
+        pooch
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+
 %test
     rg --version | head -1
     fd --version
@@ -52,6 +69,8 @@ From: vllm/vllm-openai:latest-cu130
     node -v
     npm -v
     pi --version
+    python --version
+    pytest --version
 
 %runscript
     set -eu
@@ -59,25 +78,3 @@ From: vllm/vllm-openai:latest-cu130
 
 %labels
     BuildCommand apptainer build --force sandbox.sif sandbox.def
-
-%help
-    Run sandboxed ollama/pi on euler with the following features/fixes/kludges:
-    - If the llama.cpp model list looks stale/wrong in `/model`, reset the cache with `rm -rf $EU_VIBE_DIR/home/pi-agent`
-    - Has %runscript that starts the ollama server & then an interactive shell
-    - Uses `portpicker` to pick a random open port for ollama to fix `Error: listen tcp 127.0.0.1:11434: bind: address already in use`
-    - Neither %runscipt nor %startscript are executed with `singularity shell`
-    - Using `--containall` prevents mounting the current working directory in the container (amongst other things)
-    - Does not mount home, ollama-eu shows how to run with minimal mounts/settings
-    - Container contains ollama, nodejs
-    - pi + packages kept outside of container, installed locally
-    - Based on `nvidia/cuda:12.6.0-runtime-ubuntu22.04` as used in AlphaFold3 so known to work on euler
-    - Official docker image (ollama/ollama) fails with `Error: something went wrong, please see the ollama server logs for details`
-
-    Issues:
-    - If Pi can't connect to ollama (suddenly/anymore), can "fix" with `rm -rf home`
-    - Better mount for ~/.cache?
-    - Can leave a stray vllm serve process, find & kill with:
-        ```
-        nvidia-smi --query-compute-apps=pid,process_name,used_memory
-        kill ..
-        ```
