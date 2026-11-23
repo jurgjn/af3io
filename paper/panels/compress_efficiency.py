@@ -24,7 +24,7 @@ SURFACE, INK, INK_SECONDARY, MUTED, GRID, BASELINE = '#fcfcfb', '#0b0b0b', '#525
 DATASETS = { 'alphafold3_examples': 'AlphaFold 3 examples', 'mgen_pools_5k_top3': 'pooled predictions (~5k tokens)' }
 
 def format_mb(size):
-    return f'{size:,.1f} MB' if size < 100 else f'{size:,.0f} MB'
+    return f'{size:,.2f} MB' if size < 1 else f'{size:,.1f} MB' if size < 100 else f'{size:,.0f} MB'
 
 def main():
     df = pd.read_parquet(DATA)
@@ -35,8 +35,8 @@ def main():
 
     plt.rcParams.update({ 'font.family': 'sans-serif', 'font.size': 8, 'axes.edgecolor': BASELINE, 'axes.labelcolor': INK_SECONDARY,
         'xtick.color': MUTED, 'ytick.color': INK_SECONDARY, 'text.color': INK, 'figure.facecolor': SURFACE, 'axes.facecolor': SURFACE })
-    fig, axes = plt.subplots(len(datasets), 2, figsize=(7.2, 0.9 + 0.32 * len(stages) * len(datasets)), squeeze=False,
-        gridspec_kw={ 'width_ratios': [4, 1], 'wspace': 0.04, 'hspace': 0.45 })
+    fig, axes = plt.subplots(len(datasets), 2, figsize=(7.2, 0.9 + 0.27 * len(stages) * len(datasets)), squeeze=False,
+        gridspec_kw={ 'width_ratios': [4, 1], 'wspace': 0.04, 'hspace': 0.22 })
 
     for row, dataset in zip(axes, datasets):
         table = df[df['dataset'] == dataset].pivot_table(index='stage', columns='category', values='mb', sort=False).reindex(index=stages, columns=list(CATEGORIES)).fillna(0)
@@ -78,7 +78,7 @@ def main():
     fig.legend(handles, labels, loc='upper left', bbox_to_anchor=(0.01, 1.0), ncol=len(CATEGORIES), frameon=False, fontsize=7, handlelength=1, columnspacing=1.2)
     if attrs:
         fig.text(0.99, 0.003, f'{attrs.get("git_commit", "")[:12]} {attrs.get("date", "")}', ha='right', va='bottom', color=MUTED, fontsize=5)
-    fig.subplots_adjust(top=1 - 0.45 / fig.get_figheight(), left=0.2, right=0.98, bottom=0.35 / fig.get_figheight() + 0.04)
+    fig.subplots_adjust(top=1 - 0.45 / fig.get_figheight(), left=0.25, right=0.98, bottom=0.35 / fig.get_figheight() + 0.04)
     for suffix in ('pdf', 'png'):
         fig.savefig(Path(__file__).with_suffix(f'.{suffix}'), dpi=200)
 

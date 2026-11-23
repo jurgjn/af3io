@@ -20,6 +20,7 @@ STAGES = [
     ('--compress-pae', dict(pae='lossless')),
     ('--compress-contact-probs', dict(contact_probs=True)),
     ('--compress-model', dict(model=True)),
+    ('--compress-pae-lossy', dict(pae='lossy')),
 ]
 
 # Categories of the efficiency plot (left to right), with the container categories they are made of
@@ -128,7 +129,7 @@ def test_compress_efficiency(record, tmp_path):
             image = tmp_path / f'{dataset}_{i}.af3io'
             af3io.compress.compress([source], image, af3io.compress.Settings(**settings))
             out = tmp_path / f'{dataset}_{i}'
-            af3io.compress.decompress(image, out) # verifies checksums
+            af3io.compress.decompress(image, out) # verifies checksums (of lossy contents with lossy compression)
             assert sorted(path.relative_to(out).as_posix() for path in out.rglob('*') if path.is_file()) == \
                 sorted(name for name in contents if settings['data'] != 'drop' or not name.endswith('_data.json'))
             add_rows(dataset, n_predictions, stage, ' '.join(f'{key}={value}' for key, value in settings.items()), container_sizes(image, confidences_zstd))

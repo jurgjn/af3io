@@ -312,11 +312,15 @@ def _progressbar(label):
 @click.option('--drop-data', 'data', flag_value='drop', help='Leave out data pipeline JSONs (e.g. if easy to re-create).')
 @click.option('--compress-pae', 'pae', flag_value='lossless', default=True,
     help='Compress PAE matrices in confidences JSONs as images (lossless)  [default].')
+@click.option('--compress-pae-lossy', 'pae', flag_value='lossy',
+    help='Compress PAE matrices as images, keeping values up to 15 Å and putting larger values into 2 Å bins (lossy).')
 @click.option('--no-compress-pae', 'pae', flag_value='none', help='Store PAE matrices as-is (compressed by squashfs only).')
 @click.option('--compress-contact-probs/--no-compress-contact-probs', default=True, show_default=True,
     help='Compress contact probabilities in confidences JSONs as images (lossless), once per seed.')
 @click.option('--compress-model/--no-compress-model', default=True, show_default=True,
     help='Compress predicted structures (*model.cif), with large tables (e.g. _atom_site) as parquet files.')
+@click.option('--lossy', is_flag=True, default=False,
+    help='Same as --compress-data --compress-pae-lossy --compress-contact-probs --compress-model.')
 @click.option('--extract-archives/--no-extract-archives', default=True, show_default=True,
     help='Unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression.')
 @click.option('--files-from', type=click.File('r'), default=None,
@@ -324,7 +328,7 @@ def _progressbar(label):
 @click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
 @click.argument('sources', nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
-def compress(data, pae, compress_contact_probs, compress_model, extract_archives, files_from, jobs, sources, dest):
+def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_archives, files_from, jobs, sources, dest):
     """Compress files and directories in SOURCES into a single file DEST
     (.af3io, a squashfs image), e.g.:
 
@@ -344,10 +348,19 @@ def compress(data, pae, compress_contact_probs, compress_model, extract_archives
     as parquet files with typed columns.
 
     Decompressing reproduces every file bit-identically, which is verified
-    for every file at compression and decompression time.
+    for every file at compression and decompression time. With
+    --compress-pae-lossy (or --lossy), PAE values above 15 Å are put into 2 Å
+    bins (e.g. 15.1 to 17.0 become 16.0, above 29.0 become 31.0), keeping the
+    formatting of the files otherwise.
     """
     import af3io.compress
     time_start = time.monotonic()
+    if lossy:
+        ctx = click.get_current_context()
+        for name, value in [('data', 'compress'), ('pae', 'lossless'), ('compress_contact_probs', True), ('compress_model', True)]:
+            if ctx.get_parameter_source(name) != click.core.ParameterSource.DEFAULT and ctx.params[name] != value:
+                raise click.UsageError(f'--lossy conflicts with the option given for {name.removeprefix("compress_").replace("_", "-")}')
+        data, pae, compress_contact_probs, compress_model = 'compress', 'lossy', True, True
     sources = list(sources)
     if files_from is not None:
         for line in files_from:
@@ -397,6 +410,9 @@ def decompress(force, jobs, image, patterns, dest):
     except (KeyError, FileExistsError, af3io.compress.ChecksumError) as e:
         raise click.ClickException(str(e).strip('\'"'))
     click.echo(f'Write:\t{len(names)} files to {dest}', err=True)
+    with af3io.compress.open(image) as reader:
+        if reader.manifest['settings'].get('pae') == 'lossy':
+            click.echo('Note: PAE matrices were compressed lossily (values above 15 Å in bins, see af3io compress --help)', err=True)
 
 @cli.command(short_help='Show sizes of an af3io container by file type')
 @click.argument('image', type=click.Path(exists=True, dir_okay=False, path_type=Path))

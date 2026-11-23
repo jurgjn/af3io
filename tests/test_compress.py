@@ -460,3 +460,41 @@ def test_compress_model(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_
             assert dict(reader.iter()) == files
             assert reader.manifest['stats']['fallbacks'] == ({ 'model': 1 } if setting else {})
             assert (reader.fs.lookup('/blobs/model') is not None) == setting
+
+def test_compress_pae_lossy(alphafold3_examples_dir, tmp_path):
+    from af3io.compress import confidences
+    source = alphafold3_examples_dir / 'barnase_barstar'
+    expected = decompressed_contents(source)
+    runner = click.testing.CliRunner()
+    image = tmp_path / 'lossy.af3io'
+    result = runner.invoke(af3io.cli.compress, ['--lossy', '-j', '2', str(source), str(image)])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(af3io.cli.decompress, [str(image), str(tmp_path / 'out')]) # verifies checksums of lossy contents
+    assert result.exit_code == 0 and 'lossily' in result.output, result.output
+    actual = read_dir(tmp_path / 'out')
+    assert sorted(actual) == sorted(expected)
+    n_changed = 0
+    with af3io.compress.open(image) as reader:
+        assert reader.manifest['settings']['pae'] == 'lossy'
+        assert reader.manifest['settings']['codecs']['confidences']['pae_lossy_bins'][-1] == [29, None, 31]
+        for name in expected:
+            if af3io.compress.classify(name) != 'confidences':
+                assert actual[name] == expected[name], name
+                continue
+            # Same formatting and values, apart from PAE values above 15 Å
+            js_actual, js_expected = json.loads(actual[name]), json.loads(expected[name])
+            pae = np.rint(np.array(js_expected['pae']) * 10).astype(np.uint16)
+            lossy = confidences.quantize_pae(pae) / 10
+            np.testing.assert_array_equal(np.array(js_actual['pae']), lossy)
+            np.testing.assert_array_equal(reader.read_confidences(name)['pae'], lossy)
+            assert { key: value for key, value in js_actual.items() if key != 'pae' } == { key: value for key, value in js_expected.items() if key != 'pae' }
+            start = expected[name].index(b'"pae": ')
+            assert actual[name][:start] == expected[name][:start] and len(actual[name]) == len(expected[name])
+            n_changed += (pae > 150).any()
+    assert n_changed > 0
+
+    # --lossy conflicts with other settings
+    result = runner.invoke(af3io.cli.compress, ['--lossy', '--no-compress-model', str(source), str(tmp_path / 'conflict.af3io')])
+    assert result.exit_code != 0 and 'conflicts' in result.output
+    result = runner.invoke(af3io.cli.compress, ['--lossy', '--compress-model', '-j', '1', str(source), str(tmp_path / 'same.af3io')])
+    assert result.exit_code == 0, result.output
