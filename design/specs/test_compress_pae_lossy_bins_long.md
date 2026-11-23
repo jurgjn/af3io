@@ -1,0 +1,2 @@
+separately plot distribution of PAE values from alphafold3_examples, and mgen_pools_5k_top3
+then directly down below some kind of a representation of the current lossy quantisation using vertical bars, rectangles; e.g. "lossless", "lossy" (numbers); "final edge bin"
