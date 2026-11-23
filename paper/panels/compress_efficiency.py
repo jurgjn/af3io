@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt, pandas as pd, pyarrow.parquet as pq
+import matplotlib.pyplot as plt, matplotlib.ticker, pandas as pd, pyarrow.parquet as pq
 
 PAPER = Path(__file__).parents[1]
 DATA = PAPER / 'data' / 'test_compress_efficiency.parquet'
@@ -45,6 +45,7 @@ def main():
                 ax.barh(stages, table[category], left=left, label=label)
                 left += table[category]
             ax.invert_yaxis()
+            ax.xaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter('{x:,g}')) # thousands separator
         # Broken x axis: compressed sizes on the left, the end of the uncompressed bar on the right
         ax_left.set_xlim(0, totals.drop('uncompressed').max() * 1.5)
         ax_right.set_xlim(totals['uncompressed'] * 0.7, totals['uncompressed'] * 1.25)
