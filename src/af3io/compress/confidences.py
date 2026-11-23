@@ -1,7 +1,9 @@
 """
-    Codec for confidences JSONs (*confidences.json): PAE matrices are stored as separate blobs of lossless JPEG XL images
-    (see af3io.compress.matrix), with one image for every pair of chain groups for fast access to chain pairs.
-    Matrices that cannot be re-formatted exactly (e.g. after changes in AlphaFold 3) stay in the JSON.
+    Codec for confidences JSONs (*confidences.json): PAE and contact probability matrices are stored as separate blobs of
+    lossless JPEG XL images (see af3io.compress.matrix), with one image for every pair of chain groups for fast access to
+    chain pairs. Of symmetric matrices (contact probabilities), only blocks on and above the diagonal are stored. Contact
+    probabilities are the same for all samples of a seed, so they are stored once per seed. Matrices that cannot be
+    re-formatted exactly (e.g. after changes in AlphaFold 3) stay in the JSON.
 """
 import json
 
@@ -12,14 +14,14 @@ from .codec import Span, json_join as join, json_ref, splice
 from .container import REF_SCHEME, ChecksumError, blob_path, sha256
 
 MATRICES = ('pae', 'contact_probs')
-DECIMALS = { 'pae': 1 }
+DECIMALS = { 'contact_probs': 2, 'pae': 1 }
 PARAMETERS = { 'jxl_effort': 7, 'min_group_size': 64 }
 
 def enabled(settings):
-    return settings.pae != 'none'
+    return len(fields(settings)) > 0
 
 def fields(settings):
-    return [ field for field in DECIMALS if field == 'pae' and settings.pae != 'none' ]
+    return [ field for field in DECIMALS if (field == 'pae' and settings.pae != 'none') or (field == 'contact_probs' and settings.contact_probs) ]
 
 def split(data, settings):
     selected = fields(settings)
@@ -51,7 +53,8 @@ def split(data, settings):
 
 def encode_blob(span, settings):
     values, chain_ids = span.context
-    return matrix.encode(values, DECIMALS[span.field], chain_ids, PARAMETERS['min_group_size'], effort=PARAMETERS['jxl_effort'])
+    symmetric = values.shape[0] == values.shape[1] and bool((values == values.T).all())
+    return matrix.encode(values, DECIMALS[span.field], chain_ids, PARAMETERS['min_group_size'], symmetric=symmetric, effort=PARAMETERS['jxl_effort'])
 
 def decode_blob(field, blob):
     values, index = matrix.decode(blob)

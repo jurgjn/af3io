@@ -347,7 +347,7 @@ def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_pa
         (tmp_path / name).write_bytes(data)
     for setting in ['lossless', 'none']:
         image = tmp_path / f'{setting}.af3io'
-        af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(pae=setting), jobs=1)
+        af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(pae=setting, contact_probs=False), jobs=1)
         with af3io.compress.open(image) as reader:
             assert dict(reader.iter()) == files
             stubs = { name: reader.fs.read(f'/contents/confidences/{name}') for name in files if reader.fs.lookup(f'/contents/confidences/{name}') }
@@ -356,3 +356,38 @@ def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_pa
             assert stubs['pred/null_confidences.json'] == files['pred/null_confidences.json']
             assert stubs['pred/spaces_confidences.json'] == files['pred/spaces_confidences.json']
             assert reader.manifest['stats']['fallbacks'] == ({ 'confidences': 1 } if setting == 'lossless' else {})
+
+def test_compress_contact_probs(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
+    from af3io.compress import matrix
+    expected = decompressed_contents(alphafold3_examples_dir)
+    names = [ name for name in expected if af3io.compress.classify(name) == 'confidences' ]
+    with af3io.compress.open(alphafold3_examples_af3io) as reader:
+        # One per seed: all samples (and the copy of the top-ranked one) of a seed have the same contact probabilities
+        blobs = list(reader.fs.walk('/blobs/confidences/contact_probs'))
+        assert len(blobs) == len(list(alphafold3_examples_dir.iterdir()))
+        for _, inode in blobs:
+            assert matrix.read_index(reader.fs.read(inode))['symmetric']
+        for name in names:
+            stub = json.loads(reader.fs.read(f'/contents/confidences/{name}'))
+            assert stub['contact_probs'].startswith('af3io:///blobs/confidences/contact_probs/')
+            np.testing.assert_array_equal(reader.read_confidences(name)['contact_probs'], np.array(json.loads(expected[name])['contact_probs']))
+        df = reader.info()
+        assert df.loc['contact_probs', 'uncompressed'] > 50 * df.loc['contact_probs', 'compressed'] > 0
+
+    # Non-symmetric matrices are stored in full; --no-compress-contact-probs leaves them in the JSON
+    chain_ids = ['A'] * 3 + ['B'] * 2
+    pae = [ [ float(i + j) for j in range(5) ] for i in range(5) ]
+    cp = [ [ round(0.01 * (i * 5 + j), 2) for j in range(5) ] for i in range(5) ]
+    (tmp_path / 'pred').mkdir()
+    (tmp_path / 'pred' / 'x_confidences.json').write_bytes(confidences_json(pae, cp, chain_ids))
+    for flag in ['--compress-contact-probs', '--no-compress-contact-probs']:
+        image = tmp_path / f'{flag}.af3io'
+        result = click.testing.CliRunner().invoke(af3io.cli.compress, [flag, '-j', '1', str(tmp_path / 'pred'), str(image)])
+        assert result.exit_code == 0, result.output
+        with af3io.compress.open(image) as reader:
+            assert reader.read('pred/x_confidences.json') == (tmp_path / 'pred' / 'x_confidences.json').read_bytes()
+            blobs = list(reader.fs.walk('/blobs/confidences/contact_probs'))
+            assert len(blobs) == (flag == '--compress-contact-probs')
+            if len(blobs) > 0:
+                assert not matrix.read_index(reader.fs.read(blobs[0][1]))['symmetric']
+            np.testing.assert_array_equal(reader.read_confidences('pred/x_confidences.json')['contact_probs'], np.array(cp))

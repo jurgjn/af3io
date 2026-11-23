@@ -11,6 +11,7 @@ from .container import Container, Writer, blob_path, classify, sha256
 class Settings:
     data: str = 'compress'          # data pipeline JSONs: compress (af3io.compress.data), store (as-is), or drop
     pae: str = 'lossless'           # PAE matrices in confidences JSONs: lossless (af3io.compress.confidences) or none
+    contact_probs: bool = True      # contact probability matrices in confidences JSONs (af3io.compress.confidences)
     extract_archives: bool = True   # unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression
     level: int = 19                 # zstd compression level of the squashfs image
     block_size: int = 1 << 20       # squashfs block size
