@@ -64,8 +64,11 @@ def blob_path(kind, field, digest):
 def blob_ref(path):
     return f'{REF_SCHEME}/{path}'
 
-def _codec(kind):
-    # Codecs for compressing files of a kind: encode(data, settings) => (stub, blobs, sizes); decode(stub, read_blob)
+def codec(kind):
+    """Codec for files of a kind (see af3io.compress.codec), None if there is none"""
+    if kind == 'data':
+        from . import data
+        return data
     return None
 
 class Writer:
@@ -207,9 +210,9 @@ class Container:
 
     def _read(self, name, kind, inode, verify=True):
         data = self.fs.read(inode)
-        codec = _codec(kind)
-        if codec is not None:
-            data = codec.decode(data, self.read_blob)
+        codec_ = codec(kind)
+        if codec_ is not None:
+            data = codec_.join(data, self.read_blob)
         if verify:
             self._verify(name, inode, data)
         return data
@@ -230,11 +233,11 @@ class Container:
         for name, kind, inode in self.entries(subpath):
             yield name, self._read(name, kind, inode, verify)
 
-    def read_blob(self, ref):
-        """Raw (decoded) contents of a blob from its reference, e.g. af3io:///blobs/confidences/pae/ab/abcd..."""
-        path = ref.removeprefix(REF_SCHEME)
-        _, _, kind, field, *_ = path.split('/')
-        return _codec(kind).decode_blob(field, self.fs.read(path))
+    def read_blob(self, path):
+        """Raw (decoded) contents of a blob, e.g. blobs/confidences/pae/ab/abcd..."""
+        path = path.removeprefix(REF_SCHEME).strip('/')
+        _, kind, field, *_ = path.split('/')
+        return codec(kind).decode_blob(field, self.fs.read(f'/{path}'))
 
     def info(self):
         """Uncompressed (original) and compressed (on-disk) bytes by size category as a data frame"""

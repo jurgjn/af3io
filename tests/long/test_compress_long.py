@@ -14,7 +14,9 @@ DATASETS = {
 
 # Compression settings added cumulatively, see design/specs/test_compress_efficency_long.md
 STAGES = [
-    ('squashfs', dict()),
+    ('squashfs', dict(data='store')),
+    ('--compress-data', dict(data='compress')),
+    ('--drop-data', dict(data='drop')),
 ]
 
 # Categories of the efficiency plot (left to right), with the container categories they are made of
@@ -113,7 +115,7 @@ def test_compress_efficiency(record, tmp_path):
         n_predictions = sum(name.endswith('ranking_scores.csv') for name in contents)
         add_rows(dataset, n_predictions, 'uncompressed', '', uncompressed_sizes(contents))
         add_rows(dataset, n_predictions, 'zip', '', zip_sizes(contents))
-        with concurrent.futures.ProcessPoolExecutor(mp_context=multiprocessing.get_context('forkserver')) as executor:
+        with concurrent.futures.ProcessPoolExecutor(8, mp_context=multiprocessing.get_context('forkserver')) as executor:
             unique = { hashlib.sha256(data).digest(): data for name, data in contents.items() if af3io.compress.classify(name) == 'confidences' }
             confidences_zstd = list(executor.map(_confidences_zstd_sizes, unique.values()))
 
@@ -124,7 +126,8 @@ def test_compress_efficiency(record, tmp_path):
             af3io.compress.compress([source], image, af3io.compress.Settings(**settings))
             out = tmp_path / f'{dataset}_{i}'
             af3io.compress.decompress(image, out) # verifies checksums
-            assert sorted(path.relative_to(out).as_posix() for path in out.rglob('*') if path.is_file()) == sorted(contents)
+            assert sorted(path.relative_to(out).as_posix() for path in out.rglob('*') if path.is_file()) == \
+                sorted(name for name in contents if settings['data'] != 'drop' or not name.endswith('_data.json'))
             add_rows(dataset, n_predictions, stage, ' '.join(f'{key}={value}' for key, value in settings.items()), container_sizes(image, confidences_zstd))
             image.unlink()
         del contents

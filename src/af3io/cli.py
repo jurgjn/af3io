@@ -381,6 +381,10 @@ def _progressbar(label):
     return lambda total: click.progressbar(length=total, label=label, show_pos=True, file=sys.stderr)
 
 @cli.command(short_help='Compress AlphaFold 3 inputs/outputs into a single file')
+@click.option('--compress-data', 'data', flag_value='compress', default=True,
+    help='Compress data pipeline JSONs (*_data.json) by storing MSAs and templates of each sequence once  [default].')
+@click.option('--no-compress-data', 'data', flag_value='store', help='Store data pipeline JSONs as-is (compressed by squashfs only).')
+@click.option('--drop-data', 'data', flag_value='drop', help='Leave out data pipeline JSONs (e.g. if easy to re-create).')
 @click.option('--extract-archives/--no-extract-archives', default=True, show_default=True,
     help='Unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression.')
 @click.option('--files-from', type=click.File('r'), default=None,
@@ -388,7 +392,7 @@ def _progressbar(label):
 @click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
 @click.argument('sources', nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
-def compress(extract_archives, files_from, jobs, sources, dest):
+def compress(data, extract_archives, files_from, jobs, sources, dest):
     """Compress files and directories in SOURCES into a single file DEST
     (.af3io, a squashfs image), e.g.:
 
@@ -399,6 +403,9 @@ def compress(extract_archives, files_from, jobs, sources, dest):
     default, archives (.tar, .zip) and compressed files (.gz, .zst) are
     replaced by their contents, e.g. confidences.json.zst is stored (and
     decompressed) as confidences.json.
+
+    Data pipeline JSONs (*_data.json) are compressed by storing the MSAs
+    and templates of each sequence once, however many predictions use them.
 
     Decompressing reproduces every file bit-identically, which is verified
     for every file at compression and decompression time.
@@ -417,7 +424,7 @@ def compress(extract_archives, files_from, jobs, sources, dest):
         raise click.UsageError('No files to compress, specify SOURCES and/or --files-from')
     if dest.exists():
         raise click.UsageError(f'{dest} already exists')
-    settings = af3io.compress.Settings(extract_archives=extract_archives)
+    settings = af3io.compress.Settings(data=data, extract_archives=extract_archives)
     try:
         manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progressbar('Compressing'))
     except (ValueError, FileExistsError) as e:
@@ -473,8 +480,8 @@ def info(image):
     click.echo(f'settings: {", ".join(f"{key}={value}" for key, value in manifest["settings"].items())}')
     if sum(stats['fallbacks'].values()) > 0:
         click.echo(f'fallbacks (stored as-is as compression could not be verified): {stats["fallbacks"]}')
-    if sum(stats.get('dropped', {}).values()) > 0:
-        click.echo(f'dropped: {stats["dropped"]}')
+    if stats['dropped'].get('files', 0) > 0:
+        click.echo(f'dropped: {stats["dropped"]["files"]} data pipeline JSONs ({humanfriendly.format_size(stats["dropped"]["bytes"])})')
     click.echo(f'{"":15}{"files":>8}{"uncompressed":>14}{"compressed":>12}{"ratio":>8}')
     for cat, row in df.iterrows():
         ratio = f'{row["uncompressed"] / row["compressed"]:.1f}x' if row['compressed'] > 0 and row['uncompressed'] > 0 else ''

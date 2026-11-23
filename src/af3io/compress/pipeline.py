@@ -1,7 +1,7 @@
 """
     Compress files into, and decompress files from af3io containers (see af3io.compress.container)
 """
-import collections, concurrent.futures, dataclasses, fnmatch, functools, importlib.metadata, itertools, json, multiprocessing, os, posixpath, re
+import collections, concurrent.futures, contextlib, dataclasses, fnmatch, functools, importlib.metadata, itertools, json, multiprocessing, os, posixpath, re
 
 from .. import archive
 from . import container
@@ -9,12 +9,20 @@ from .container import Container, Writer, blob_path, classify, sha256
 
 @dataclasses.dataclass(frozen=True)
 class Settings:
+    data: str = 'compress'          # data pipeline JSONs: compress (af3io.compress.data), store (as-is), or drop
     extract_archives: bool = True   # unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression
     level: int = 19                 # zstd compression level of the squashfs image
     block_size: int = 1 << 20       # squashfs block size
 
+    def __post_init__(self):
+        if self.data not in ('compress', 'store', 'drop'):
+            raise ValueError(f'invalid data setting {self.data!r}')
+
     def manifest(self):
-        return dataclasses.asdict(self)
+        settings = dataclasses.asdict(self)
+        settings['codecs'] = { kind: container.codec(kind).PARAMETERS for kind in container.KINDS
+            if container.codec(kind) is not None and container.codec(kind).enabled(self) }
+        return settings
 
 @dataclasses.dataclass
 class FileResult:
@@ -84,14 +92,62 @@ def group_inputs(inputs, max_files=64):
         groups[_group_key(path)].append((path, locator))
     return [ group[i:i + max_files] for group in groups.values() for i in range(0, len(group), max_files) ]
 
-def compress_file(path, data, settings, cache=None):
-    """Compress a single file, return FileResult"""
+class VerificationError(ValueError):
+    pass
+
+def _has_refs(codec, data):
+    # Whether data contains references to blobs (only possible in files not compressed by af3io)
+    def read(path):
+        raise KeyError(path)
+    try:
+        codec.join(data, read)
+        return False
+    except KeyError:
+        return True
+
+def _encode(path, kind, codec, data, settings, blobs_done, known):
+    stub, spans = codec.split(data, settings)
+    if codec.join(stub, { span.path: span.original for span in spans }.__getitem__) != data:
+        raise VerificationError(f'{path}: stub does not re-generate the original')
+    raws = { span.path: span.raw for span in spans }
+    blobs = {}
+    for span in spans:
+        if span.path in blobs or span.path in blobs_done or (known is not None and span.path in known):
+            continue
+        blob = codec.encode_blob(span, settings)
+        if codec.decode_blob(span.field, blob) != span.raw:
+            raise VerificationError(f'{path}: blob {span.path} does not decompress to its contents')
+        blobs[span.path] = blob
+    blobs_done.update(blobs) # only once all parts of the file are compressed (as it is stored as-is otherwise)
+    contents = codec.join(stub, raws.__getitem__) # differs from data with lossy compression
+    uncompressed = collections.Counter({ kind: len(contents) })
+    for span in spans:
+        uncompressed[kind] -= len(span.raw)
+        uncompressed[span.category] += len(span.raw)
+    return FileResult(path, kind, stub, sha256(contents), len(contents), list(blobs.items()), dict(uncompressed))
+
+def compress_file(path, data, settings, cache=None, known=None):
+    """Compress a single file, return FileResult. Blobs in known (paths of blobs written already) and in the cache
+    (shared between calls, e.g. for files of the same prediction) are not encoded again.
+    """
     kind = classify(path)
     digest = sha256(data)
     cache = {} if cache is None else cache
+    blobs_done = cache.setdefault('blobs', set())
+    if kind == 'data' and settings.data == 'drop':
+        return FileResult(path, None, b'', digest, len(data), [], {})
     if (kind, digest) in cache: # identical file in the same group, e.g. the top-ranked model and its copy
-        return dataclasses.replace(cache[kind, digest], path=path)
-    result = FileResult(path, kind, data, digest, len(data), [], {kind: len(data)})
+        return dataclasses.replace(cache[kind, digest], path=path, blobs=[])
+    codec = container.codec(kind)
+    if codec is not None and codec.enabled(settings):
+        try:
+            result = _encode(path, kind, codec, data, settings, blobs_done, known)
+        except Exception: # incl. unexpected formats, see design/specs/compress.md
+            result = FileResult(path, 'other', data, digest, len(data), [], {'other': len(data)}, fallback=kind)
+    elif codec is not None and _has_refs(codec, data):
+        result = FileResult(path, 'other', data, digest, len(data), [], {'other': len(data)})
+    else:
+        result = FileResult(path, kind, data, digest, len(data), [], {kind: len(data)})
     cache[kind, digest] = result
     return result
 
@@ -102,11 +158,17 @@ def _read_input(locator, settings):
     with open(locator, 'rb') as fh:
         return fh.read()
 
+_known = None
+
+def _init_known(known):
+    global _known
+    _known = known
+
 def _compress_group(group, settings):
     cache, results = {}, []
     for path, locator in group:
         data = _read_input(locator, settings)
-        results.append(compress_file(path, data, settings, cache))
+        results.append(compress_file(path, data, settings, cache, _known))
     return results
 
 def _imap(executor, fn, iterable, ahead):
@@ -122,8 +184,30 @@ def _imap(executor, fn, iterable, ahead):
 def default_jobs():
     return len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
 
+# Workers are single-threaded: without these, every worker starts a thread per core for numpy (OpenBLAS) and pyarrow,
+# which exceeds limits on the number of processes per user on machines with many cores
+_WORKER_ENV = { 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1' }
+
+@contextlib.contextmanager
+def _worker_env():
+    saved = { var: os.environ.get(var) for var in _WORKER_ENV }
+    for var, value in _WORKER_ENV.items():
+        os.environ.setdefault(var, value)
+    try:
+        yield
+    finally:
+        for var, value in saved.items():
+            if value is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = value
+
+@contextlib.contextmanager
 def _executor(jobs, initializer=None, initargs=()):
-    return concurrent.futures.ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context('forkserver'), initializer=initializer, initargs=initargs)
+    # Spawned (not forked) workers, which start with the environment at the time they are started
+    with _worker_env(), concurrent.futures.ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context('spawn'),
+            initializer=initializer, initargs=initargs) as executor:
+        yield executor
 
 class _NoProgress:
     def __init__(self, total):
@@ -137,6 +221,8 @@ class _NoProgress:
 
     def update(self, n):
         pass
+
+KIND_ORDER = { kind: i for i, kind in enumerate(container.KINDS) }
 
 def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress):
     """Compress files under sources into a new container at dest, return the manifest. progress(total) returns a
@@ -152,25 +238,33 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
         'blobs': 0,
     }
     with Writer(dest, level=settings.level, block_size=settings.block_size, processors=jobs) as writer, \
-            progress(sum(map(len, groups))) as bar:
-        with _executor(jobs) as executor:
+            progress(sum(map(len, groups))) as bar, multiprocessing.get_context('spawn').Manager() as manager:
+        known = manager.dict() # blobs written, shared with workers so they skip encoding them again
+        with _executor(jobs, initializer=_init_known, initargs=(known,)) as executor:
             for results in _imap(executor, functools.partial(_compress_group, settings=settings), groups, ahead=2 * jobs):
-                for result in results:
-                    stats['uncompressed'].update(result.uncompressed)
+                # Files are packed into squashfs fragment blocks in the order they are written: write files of the same
+                # kind next to each other (e.g. models of all samples), and blobs (mostly compressed already) last
+                group_blobs = []
+                for result in sorted(results, key=lambda result: KIND_ORDER.get(result.kind, 0)):
                     if result.kind is None:
-                        stats['dropped'][classify(result.path)] += 1
+                        stats['dropped']['files'] += 1
+                        stats['dropped']['bytes'] += result.size
+                        bar.update(1)
                         continue
+                    stats['uncompressed'].update(result.uncompressed)
                     stats['files'][result.kind] += 1
                     xattrs = { container.XATTR_SHA256: result.sha256, container.XATTR_SIZE: str(result.size) }
                     if result.fallback is not None:
                         stats['fallbacks'][result.fallback] += 1
                         xattrs[container.XATTR_FALLBACK] = result.fallback
-                    for path, blob in result.blobs:
-                        if path not in writer:
-                            writer.add(path, blob)
-                            stats['blobs'] += 1
+                    group_blobs += result.blobs
                     writer.add(f'contents/{result.kind}/{result.path}', result.stub, xattrs)
                     bar.update(1)
+                for path, blob in group_blobs:
+                    if path not in writer:
+                        writer.add(path, blob)
+                        known[path] = True
+                        stats['blobs'] += 1
         manifest = {
             'format': container.FORMAT_VERSION,
             'af3io_version': importlib.metadata.version('af3io'),

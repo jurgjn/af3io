@@ -3,6 +3,7 @@ This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calve
 
 ## [Unreleased]
 - Added `compress`, `decompress` and `info` to store predictions (directories, archives) in a single squashfs image (`.af3io`) with bit-identical decompression verified by sha256, see `af3io.compress` and design/adr/0001-compress-squashfs-container.md
+- Added compression of data pipeline JSONs to `compress` by storing MSAs and templates of each sequence once (`--compress-data`, default), or leaving them out (`--drop-data`), see design/adr/0002-compress-data-pipeline.md
 - Added reading predictions from af3io containers (`af3io.predictions.Predictions`, `summary-confidences`), and `af3io.predictions.stream_predictions` to iterate over models, PAE and contact probabilities of predictions in directories, archives or containers
 - Fixed `summary-confidences` failing on predictions with ligands, ions, nucleic acids, glycans or modified residues: structure-based scores are now computed per AlphaFold 3 token, and ipTM reported as null is kept as NaN
 

@@ -198,3 +198,73 @@ def test_compress_predictions(alphafold3_examples_dir, alphafold3_examples_af3io
     assert [ (pair.chain1, pair.chain2) for pair in pairs ] == [ (c1, c2) for c1 in 'ABCD' for c2 in 'ABCD' ]
     assert pairs[2].pae.shape == (218, 20)
     assert sum(1 for _ in af3io.predictions.stream_predictions(alphafold3_examples_af3io)) == 13
+
+def test_jsonspan():
+    from af3io.compress import jsonspan
+    text = '{"a": [1, {"b": "x\\"y", "c": [2, 3]}], "d": {"b": null}, "e": "é"}'
+    def select(path):
+        return jsonspan.SPAN if path[-1:] == ('b',) else jsonspan.DESCEND
+    spans = jsonspan.find(text, select)
+    assert [ (path, text[start:end]) for path, start, end in spans ] == [ (('a', 1, 'b'), '"x\\"y"'), (('d', 'b'), 'null') ]
+    assert jsonspan.find(text, lambda path: jsonspan.SKIP) == []
+    for invalid in ['{"a": [1, 2', '{"a" 1}', '[1,]', '{"a": 1} x', '', '{"a": 1,}']:
+        with pytest.raises(ValueError):
+            jsonspan.find(invalid, lambda path: jsonspan.DESCEND)
+
+def test_compress_data(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
+    expected = decompressed_contents(alphafold3_examples_dir)
+    data_names = [ name for name in expected if name.endswith('_data.json') ]
+    with af3io.compress.open(alphafold3_examples_af3io) as reader:
+        # MSAs and templates are stored once, e.g. TetR in tetr_homodimer, tetr_dimer_dna and tetr_dimer_tetracycline
+        blobs = [ path for path, _ in reader.fs.walk('/blobs/data') ]
+        n_refs = sum(reader.fs.read(f'/contents/data/{name}').count(b'af3io:///blobs/data/') for name in data_names)
+        assert 0 < len(blobs) < n_refs
+        assert { path.split('/')[3] for path in blobs } == {'unpairedMsa', 'pairedMsa', 'templates'}
+        stub = json.loads(reader.fs.read(f'/contents/data/alphafold3_predictions/barnase_barstar/barnase_barstar_data.json'))
+        assert stub['sequences'][0]['protein']['unpairedMsa'].startswith('af3io:///blobs/data/unpairedMsa/')
+        for name in data_names:
+            assert reader.read(name) == expected[name]
+        assert reader.manifest['settings']['codecs']['data']['zstd_level'] == 19
+
+    source = alphafold3_examples_dir / 'barnase_barstar'
+    expected = decompressed_contents(source)
+    for setting in ['store', 'drop']:
+        image = tmp_path / f'{setting}.af3io'
+        af3io.compress.compress([source], image, af3io.compress.Settings(data=setting), jobs=2)
+        with af3io.compress.open(image) as reader:
+            assert list(reader.fs.walk('/blobs')) == []
+            if setting == 'store':
+                assert reader.namelist() == sorted(expected)
+                assert reader.fs.read('/contents/data/barnase_barstar/barnase_barstar_data.json') == expected['barnase_barstar/barnase_barstar_data.json']
+            else:
+                assert reader.namelist() == sorted(name for name in expected if not name.endswith('_data.json'))
+                assert reader.manifest['stats']['dropped'] == { 'files': 1, 'bytes': len(expected['barnase_barstar/barnase_barstar_data.json']) }
+        result = click.testing.CliRunner().invoke(af3io.cli.info, [str(image)])
+        assert result.exit_code == 0 and ('dropped: 1 data pipeline JSONs' in result.output) == (setting == 'drop'), result.output
+    with pytest.raises(ValueError):
+        af3io.compress.Settings(data='zip')
+
+def test_compress_fallback(tmp_path):
+    # Files that cannot be compressed (as expected) are stored as-is under contents/other
+    msa = '>query\\nMKTAYIAKQR' * 50
+    files = {
+        'pred/invalid_data.json': b'{"sequences": [ {"protein": {"unpairedMsa": "' + msa.encode() + b'" } } ',
+        'pred/literal_data.json': json.dumps({ 'sequences': [ { 'protein': { 'unpairedMsa': msa, 'description': 'af3io:///blobs/data/x/ab/abc' } } ] }).encode(),
+        'pred/ok_data.json': json.dumps({ 'sequences': [ { 'protein': { 'unpairedMsa': msa, 'pairedMsa': '' } } ] }, indent=2).encode(),
+    }
+    for name, data in files.items():
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).write_bytes(data)
+    for setting, fallbacks in [('compress', 2), ('store', 0)]:
+        image = tmp_path / f'{setting}.af3io'
+        af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(data=setting), jobs=1)
+        with af3io.compress.open(image) as reader:
+            assert dict(reader.iter()) == files
+            assert reader.manifest['stats']['fallbacks'] == ({ 'data': fallbacks } if fallbacks > 0 else {})
+            other = { path for path, _ in reader.fs.walk('/contents/other') }
+            assert '/contents/other/pred/literal_data.json' in other # stored as-is, would be mis-read as a reference otherwise
+            assert ('/contents/other/pred/invalid_data.json' in other) == (setting == 'compress')
+            assert ('/contents/other/pred/ok_data.json' in other) == False
+            if setting == 'compress':
+                assert reader.fs.xattrs(reader.fs.lookup('/contents/other/pred/invalid_data.json'))[container.XATTR_FALLBACK] == b'data'
+                assert b'af3io:///blobs/data/unpairedMsa/' in reader.fs.read('/contents/data/pred/ok_data.json')
