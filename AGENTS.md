@@ -16,6 +16,8 @@ If a tool, package, or other dependency is missing from the sandbox, don't work 
 
 Use the defaults of the plotting library (e.g. matplotlib's colours, fonts, styles and layout engines); don't add custom styling such as colour palettes, themes, `rcParams` or hand-tuned margins and spines.
 
+Format numbers on plots (values, axis and tick labels, annotations, titles) in English (US/UK) style: a comma as the thousands separator (digit grouping) and a period as the decimal separator, e.g. 1,234.5. Tick labels have no thousands separator by default in matplotlib; set one with e.g. `ax.xaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter('{x:,g}'))`.
+
 ## CHANGELOG.md
 
 Start every changelog entry with one of: Added, Changed, Deprecated, Removed, Fixed, Security (adapted from [Keep a Changelog](https://keepachangelog.com/)), e.g. ``- Added `fixname` to set ...``.
