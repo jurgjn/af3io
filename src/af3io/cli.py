@@ -1,6 +1,6 @@
 
 import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, sys, time, zipfile, warnings
-import click, humanfriendly, numpy as np, zarr
+import click, humanfriendly, numpy as np
 import af3io
 from pathlib import Path
 from pprint import pprint
@@ -219,81 +219,6 @@ def data_dump(json_path):
             click.echo(f"queryIndices[:5]:\t{template['queryIndices'][:5]}")
             click.echo(f"templateIndices[:5]:\t{template['templateIndices'][:5]}")
 
-'''
-@cli.command(short_help='Compress a confidences JSON')
-@click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-def confidences_compress(confidences_json):
-    """Compress a confidences JSON."""
-
-    # Compress from <name>.json to <name>.json.af3io
-    confidences_compressed = confidences_json.with_suffix(confidences_json.suffix + '.af3io')
-
-    js = af3io.confidences.read_confidences_json(confidences_json)
-    js_encode = af3io.confidences.json_encode(js)
-
-    # Store as a single compressed file using zarr ZipStore
-    with zarr.storage.ZipStore(confidences_compressed, mode='w') as store:
-        root = zarr.create_group(store=store)
-
-        with warnings.catch_warnings(): # Suppress seemingly harmless `UserWarning: Duplicate name: 'zarr.json'`
-            warnings.simplefilter('ignore')
-            # atom_plddts, contact_probs, pae: store as attributes
-            for name in ['atom_chain_ids', 'token_chain_ids', 'token_res_ids']:
-                root.attrs[name] = js_encode[name]
-
-        # atom_plddts, contact_probs, pae: compress with Blosc (PCodec?)
-        for name in ['atom_plddts', 'contact_probs', 'pae']:
-            array_ = root.create_array(name=name,
-                shape=js_encode[name].shape,
-                dtype=js_encode[name].dtype,
-                compressors=zarr.codecs.BloscCodec(clevel=9),
-            )
-            if len(js_encode[name].shape) == 1:
-                array_[:] = js_encode[name]
-            else:
-                array_[:,:] = js_encode[name]
-
-    #pools_5k_0040f80/pools_5k_0040f80_confidences.json :  4.45%   (234068369 => 10407605 bytes, pools_5k_0040f80/pools_5k_0040f80_confidences.json.zst)
-    source_bytes = os.path.getsize(confidences_json)
-    target_bytes = os.path.getsize(confidences_compressed)
-    frac_compressed = 100 * target_bytes / source_bytes
-    click.echo(f'{confidences_json} : {frac_compressed:.2f}% ({source_bytes} => {target_bytes} bytes, {confidences_compressed})')
-
-@cli.command(short_help='Decompress a confidences JSON')
-@click.argument('compressed_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
-def confidences_decompress(compressed_json):
-    """Decompress a confidences JSON."""
-
-    with zarr.storage.ZipStore(compressed_json, read_only=True) as store:
-        root = zarr.open_group(store=store, mode='r')
-        confidences_str_ = af3io.confidences.dumps_json(
-            atom_chain_ids = af3io.confidences_eval.repeating_decode(root.attrs['atom_chain_ids']),
-            atom_plddts = af3io.confidences.decimal_decode(root['atom_plddts'], 2),
-            contact_probs = af3io.confidences.decimal_decode(af3io.confidences.symm_decode(root['contact_probs']), 2),
-            pae = af3io.confidences.decimal_decode(root['pae'], 1),
-            token_chain_ids = af3io.confidences_eval.repeating_decode(root.attrs['token_chain_ids']),
-            token_res_ids = af3io.confidences_eval.increasing_decode(root.attrs['token_res_ids']),
-        )
-
-    # By default, decompress from <name>.json.af3io to <name>.json
-    suffixes_ = compressed_json.suffixes
-    assert suffixes_[-1] == '.af3io'
-    assert suffixes_[-2] == '.json'
-    confidences_decompressed = compressed_json.with_suffix('')
-
-    # If <name>.json exists, decompress to <name>.json.decompressed instead
-    confidences_decompressed_alt = compressed_json.with_suffix('.decompressed')
-    if confidences_decompressed.is_file():
-        click.echo(f'{confidences_decompressed} exists, writing to {confidences_decompressed_alt}')
-        confidences_decompressed = confidences_decompressed_alt
-
-    # Write decompressed contents
-    with open(confidences_decompressed, 'w') as fh:
-        fh.write(confidences_str_)
-    source_bytes = os.path.getsize(compressed_json)
-    click.echo(f'{compressed_json} : {source_bytes} bytes decompressed to {confidences_decompressed}')
-'''
-
 @cli.command(short_help='Show compact summary of a confidences JSON')
 @click.argument('confidences_json', type=click.Path(exists=True, file_okay=True, readable=True, path_type=Path))
 def confidences_show(confidences_json):
@@ -385,6 +310,9 @@ def _progressbar(label):
     help='Compress data pipeline JSONs (*_data.json) by storing MSAs and templates of each sequence once  [default].')
 @click.option('--no-compress-data', 'data', flag_value='store', help='Store data pipeline JSONs as-is (compressed by squashfs only).')
 @click.option('--drop-data', 'data', flag_value='drop', help='Leave out data pipeline JSONs (e.g. if easy to re-create).')
+@click.option('--compress-pae', 'pae', flag_value='lossless', default=True,
+    help='Compress PAE matrices in confidences JSONs as images (lossless)  [default].')
+@click.option('--no-compress-pae', 'pae', flag_value='none', help='Store PAE matrices as-is (compressed by squashfs only).')
 @click.option('--extract-archives/--no-extract-archives', default=True, show_default=True,
     help='Unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression.')
 @click.option('--files-from', type=click.File('r'), default=None,
@@ -392,7 +320,7 @@ def _progressbar(label):
 @click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
 @click.argument('sources', nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
-def compress(data, extract_archives, files_from, jobs, sources, dest):
+def compress(data, pae, extract_archives, files_from, jobs, sources, dest):
     """Compress files and directories in SOURCES into a single file DEST
     (.af3io, a squashfs image), e.g.:
 
@@ -406,6 +334,7 @@ def compress(data, extract_archives, files_from, jobs, sources, dest):
 
     Data pipeline JSONs (*_data.json) are compressed by storing the MSAs
     and templates of each sequence once, however many predictions use them.
+    PAE matrices in confidences JSONs are stored as lossless images (JPEG XL).
 
     Decompressing reproduces every file bit-identically, which is verified
     for every file at compression and decompression time.
@@ -424,7 +353,7 @@ def compress(data, extract_archives, files_from, jobs, sources, dest):
         raise click.UsageError('No files to compress, specify SOURCES and/or --files-from')
     if dest.exists():
         raise click.UsageError(f'{dest} already exists')
-    settings = af3io.compress.Settings(data=data, extract_archives=extract_archives)
+    settings = af3io.compress.Settings(data=data, pae=pae, extract_archives=extract_archives)
     try:
         manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progressbar('Compressing'))
     except (ValueError, FileExistsError) as e:

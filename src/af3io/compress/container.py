@@ -69,6 +69,9 @@ def codec(kind):
     if kind == 'data':
         from . import data
         return data
+    elif kind == 'confidences':
+        from . import confidences
+        return confidences
     return None
 
 class Writer:
@@ -232,6 +235,20 @@ class Container:
         """Yield (name, contents) of all files under subpath"""
         for name, kind, inode in self.entries(subpath):
             yield name, self._read(name, kind, inode, verify)
+
+    def read_confidences(self, name, verify=True):
+        """Confidences JSON as a dict with PAE and contact probabilities as numpy arrays (as np.array(json.load(...)[key])
+        would give), decoded from their blobs without parsing them as text, which is faster than json.load(open(name))
+        """
+        from . import confidences
+        kind, inode = self._lookup(name)
+        if kind != 'confidences':
+            return confidences.read(self._read(name, kind, inode, verify), None)
+        checksum = self.fs.xattrs(inode).get(XATTR_SHA256, b'').decode() if verify else None
+        try:
+            return confidences.read(self.fs.read(inode), lambda path: self.fs.read(f'/{path}'), checksum)
+        except ChecksumError:
+            raise ChecksumError(f'{self.path}: checksum mismatch for {name}')
 
     def read_blob(self, path):
         """Raw (decoded) contents of a blob, e.g. blobs/confidences/pae/ab/abcd..."""

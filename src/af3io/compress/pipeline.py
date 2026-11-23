@@ -10,6 +10,7 @@ from .container import Container, Writer, blob_path, classify, sha256
 @dataclasses.dataclass(frozen=True)
 class Settings:
     data: str = 'compress'          # data pipeline JSONs: compress (af3io.compress.data), store (as-is), or drop
+    pae: str = 'lossless'           # PAE matrices in confidences JSONs: lossless (af3io.compress.confidences) or none
     extract_archives: bool = True   # unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression
     level: int = 19                 # zstd compression level of the squashfs image
     block_size: int = 1 << 20       # squashfs block size
@@ -17,6 +18,8 @@ class Settings:
     def __post_init__(self):
         if self.data not in ('compress', 'store', 'drop'):
             raise ValueError(f'invalid data setting {self.data!r}')
+        if self.pae not in ('lossless', 'none'):
+            raise ValueError(f'invalid pae setting {self.pae!r}')
 
     def manifest(self):
         settings = dataclasses.asdict(self)

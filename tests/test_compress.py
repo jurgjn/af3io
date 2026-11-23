@@ -1,4 +1,4 @@
-import gzip, hashlib, json, os, shutil, subprocess, zipfile
+import gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
@@ -232,7 +232,7 @@ def test_compress_data(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_p
         image = tmp_path / f'{setting}.af3io'
         af3io.compress.compress([source], image, af3io.compress.Settings(data=setting), jobs=2)
         with af3io.compress.open(image) as reader:
-            assert list(reader.fs.walk('/blobs')) == []
+            assert list(reader.fs.walk('/blobs/data')) == []
             if setting == 'store':
                 assert reader.namelist() == sorted(expected)
                 assert reader.fs.read('/contents/data/barnase_barstar/barnase_barstar_data.json') == expected['barnase_barstar/barnase_barstar_data.json']
@@ -268,3 +268,91 @@ def test_compress_fallback(tmp_path):
             if setting == 'compress':
                 assert reader.fs.xattrs(reader.fs.lookup('/contents/other/pred/invalid_data.json'))[container.XATTR_FALLBACK] == b'data'
                 assert b'af3io:///blobs/data/unpairedMsa/' in reader.fs.read('/contents/data/pred/ok_data.json')
+
+def test_matrix():
+    from af3io.compress import matrix
+    rng = np.random.default_rng(0)
+    chain_ids = ['A'] * 70 + ['B'] * 3 + ['C'] + ['D'] * 80
+    values = rng.integers(0, 320, size=(154, 154)).astype(np.uint16)
+    raw = matrix.format(values, 1)
+    assert raw.startswith(b'[[') and b' ' not in raw
+    assert json.loads(raw) == [ [ k / 10 for k in row ] for row in values.tolist() ]
+    np.testing.assert_array_equal(matrix.parse(raw, 1), values)
+    assert matrix.format(np.array([[0, 5, 10, 100]]), 2) == b'[[0.0,0.05,0.1,1.0]]'
+
+    assert matrix.chain_groups(matrix.chain_runs(chain_ids), 64) == [('A-B-C', 0, 74), ('D', 74, 154)] # small chains join the previous group
+    assert matrix.chain_groups(matrix.chain_runs(chain_ids), 1) == [('A', 0, 70), ('B', 70, 73), ('C', 73, 74), ('D', 74, 154)]
+    assert matrix.chain_groups(matrix.chain_runs(['A'] * 3 + ['B/1'] * 2), 1) == [('0', 0, 3), ('1', 3, 5)]
+
+    symmetric = np.triu(values) + np.triu(values, 1).T
+    for data, is_symmetric in [(values, False), (symmetric, True)]:
+        for ids in [chain_ids, None, ['A'] * 10]: # None or mismatched chain ids: a single block
+            blob = matrix.encode(data, 1, ids, symmetric=is_symmetric)
+            decoded, index = matrix.decode(blob)
+            np.testing.assert_array_equal(decoded, data)
+            assert index['decimals'] == 1 and index['symmetric'] == is_symmetric
+        blob = matrix.encode(data, 1, chain_ids, symmetric=is_symmetric)
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            assert sorted(zf.namelist()) == sorted(['matrix.json', 'A-B-C_A-B-C.jxl', 'A-B-C_D.jxl', 'D_D.jxl'] + ([] if is_symmetric else ['D_A-B-C.jxl']))
+            assert all(info.compress_type == zipfile.ZIP_STORED for info in zf.infolist())
+        ids = np.asarray(chain_ids)
+        for chain1, chain2 in itertools.product('ABCD', repeat=2):
+            np.testing.assert_array_equal(matrix.decode_block(blob, chain1, chain2), data[np.ix_(ids == chain1, ids == chain2)])
+        with pytest.raises(KeyError):
+            matrix.decode_block(blob, 'A', 'Z')
+        assert matrix.encode(data, 1, chain_ids, symmetric=is_symmetric) == blob # deterministic
+
+    for invalid in [b'[[1.0,2.0],[3.0]]', b'[[1.0,null]]', b'[[-1.0]]', b'[[]]', b'[1.0]', b'[[1.0] ]', b'[[1e9]]']:
+        with pytest.raises(ValueError):
+            matrix.parse(invalid, 1)
+    with pytest.raises(ValueError):
+        matrix.encode(np.zeros((2, 3), dtype=np.uint16), 1)
+
+def confidences_json(pae, contact_probs, chain_ids):
+    # As written by AlphaFold 3 (see af3io.confidences.dumps_json)
+    return af3io.confidences.dumps_json(
+        atom_chain_ids=chain_ids, atom_plddts=[ 50.0 ] * len(chain_ids), contact_probs=contact_probs, pae=pae,
+        token_chain_ids=chain_ids, token_res_ids=list(range(1, len(chain_ids) + 1)),
+    ).encode()
+
+def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
+    expected = decompressed_contents(alphafold3_examples_dir)
+    names = [ name for name in expected if af3io.compress.classify(name) == 'confidences' ]
+    with af3io.compress.open(alphafold3_examples_af3io) as reader:
+        assert reader.manifest['stats']['fallbacks'] == {}
+        n_blobs = sum(1 for _ in reader.fs.walk('/blobs/confidences/pae'))
+        assert len(names) // 6 * 5 <= n_blobs < len(names) # top-ranked models are copies of samples
+        for name in names:
+            stub = json.loads(reader.fs.read(f'/contents/confidences/{name}'))
+            assert stub['pae'].startswith('af3io:///blobs/confidences/pae/')
+            js = reader.read_confidences(name)
+            original = json.loads(expected[name])
+            np.testing.assert_array_equal(js['pae'], np.array(original['pae']))
+            assert js['token_chain_ids'] == original['token_chain_ids']
+        df = reader.info()
+        assert df.loc['pae', 'uncompressed'] > 10 * df.loc['pae', 'compressed'] > 0
+
+    # Matrices that cannot be re-formatted exactly stay in the JSON
+    chain_ids = ['A'] * 3 + ['B'] * 2
+    pae = [ [ float(i + j) for j in range(5) ] for i in range(5) ]
+    cp = [ [ 0.5 ] * 5 for _ in range(5) ]
+    files = {
+        'pred/ok_confidences.json': confidences_json(pae, cp, chain_ids),
+        'pred/null_confidences.json': confidences_json([ row[:4] + [None] for row in pae ], cp, chain_ids),
+        'pred/spaces_confidences.json': confidences_json(pae, cp, chain_ids).replace(b'[0.0,1.0', b'[0.0, 1.0'),
+        'pred/invalid_confidences.json': confidences_json(pae, cp, chain_ids)[:-1],
+    }
+    for name, data in files.items():
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).write_bytes(data)
+    for setting in ['lossless', 'none']:
+        image = tmp_path / f'{setting}.af3io'
+        af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(pae=setting), jobs=1)
+        with af3io.compress.open(image) as reader:
+            assert dict(reader.iter()) == files
+            stubs = { name: reader.fs.read(f'/contents/confidences/{name}') for name in files if reader.fs.lookup(f'/contents/confidences/{name}') }
+            assert set(stubs) == set(files) - ({'pred/invalid_confidences.json'} if setting == 'lossless' else set())
+            assert (b'af3io:///' in stubs['pred/ok_confidences.json']) == (setting == 'lossless')
+            assert stubs['pred/null_confidences.json'] == files['pred/null_confidences.json']
+            assert stubs['pred/spaces_confidences.json'] == files['pred/spaces_confidences.json']
+            assert reader.manifest['stats']['fallbacks'] == ({ 'confidences': 1 } if setting == 'lossless' else {})

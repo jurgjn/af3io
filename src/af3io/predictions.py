@@ -105,6 +105,8 @@ class Predictions:
 
     def read_confidences(self, file):
         """Confidences JSON (e.g. confidences_path) as a dict, with PAE and contact probabilities as numpy arrays"""
+        if self._container is not None and archive.strip_compression(self._stored_names[file]) == self._stored_names[file]:
+            return self._container.read_confidences(self._container_prefix + self._stored_names[file])
         with self.open(file) as fh:
             js = json.load(fh)
         for key in ('pae', 'contact_probs'):
@@ -239,14 +241,13 @@ def read_struct(pred, model_path):
         return struct[0]
 
 def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
-    with pred.open(confidences_path) as fh:
-        js = json.load(fh)
+    js = pred.read_confidences(confidences_path)
 
     chain_ids = np.asarray(js['token_chain_ids'])
-    contact_probs = np.array(js['contact_probs']) # byte-identical across models (but not seeds)
+    contact_probs = js['contact_probs'] # byte-identical across models (but not seeds)
 
     # PAE not symmetric, different across all models/samples
-    pae = np.array(js['pae'])
+    pae = js['pae']
 
     # contact matrix, pLDDT (B-factor), and centre-of-mass distances based on model coordinates
     struct = read_struct(pred, model_path)
@@ -325,11 +326,10 @@ def read_contact_probs(path, chain1, chain2):
     with Predictions(path) as pred:
         scores = pred.read_summary_confidences()
         confidences_path = scores.head(1)['confidences_path'].squeeze()
-        with pred.open(confidences_path) as fh:
-            js = json.load(fh)
+        js = pred.read_confidences(confidences_path)
 
     chain_ids = np.asarray(js['token_chain_ids'])
-    contact_probs = np.array(js['contact_probs'])
+    contact_probs = js['contact_probs']
     block = contact_probs[ np.ix_(chain_ids == chain1, chain_ids == chain2) ]
     return block
 

@@ -19,7 +19,7 @@ dependencies = [
   "humanfriendly",
   "scipy",
   "pandas",
-  "zarr",
+  "imagecodecs",
   "biopython",
   "pyarrow",
   "backports.zstd; python_version < '3.14'",

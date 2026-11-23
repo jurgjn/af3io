@@ -14,9 +14,10 @@ DATASETS = {
 
 # Compression settings added cumulatively, see design/specs/test_compress_efficency_long.md
 STAGES = [
-    ('squashfs', dict(data='store')),
+    ('squashfs', dict(data='store', pae='none')),
     ('--compress-data', dict(data='compress')),
     ('--drop-data', dict(data='drop')),
+    ('--compress-pae', dict(pae='lossless')),
 ]
 
 # Categories of the efficiency plot (left to right), with the container categories they are made of
