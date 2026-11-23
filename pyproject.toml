@@ -27,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov", "pooch"]
+paper = ["matplotlib"]
 
 [project.scripts]
 af3io = "af3io.cli:cli"

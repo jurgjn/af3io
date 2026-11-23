@@ -1,6 +1,10 @@
 # Shared helpers for tests: test data download/caching and in-memory archive construction
 
-import hashlib, io, tarfile, zipfile
+import gzip, hashlib, io, tarfile, zipfile
+try:
+    from compression import zstd # Python >= 3.14
+except ImportError:
+    from backports import zstd
 from pathlib import Path
 import pooch
 
@@ -44,3 +48,24 @@ def tar_bytes(members):
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
     return buf.getvalue()
+
+def decompressed_contents(root):
+    """{name: contents} of all files under root as added by af3io compress (under the base name of root, with .gz/.zst
+    files decompressed), computed independently of af3io.compress
+    """
+    root = Path(root)
+    contents = {}
+    for path in sorted(root.rglob('*')):
+        if path.is_file():
+            name = path.relative_to(root.parent).as_posix()
+            data = path.read_bytes()
+            if name.endswith('.gz'):
+                name, data = name.removesuffix('.gz'), gzip.decompress(data)
+            elif name.endswith('.zst'):
+                name, data = name.removesuffix('.zst'), zstd.decompress(data)
+            contents[name] = data
+    return contents
+
+def read_dir(root):
+    root = Path(root)
+    return { path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob('*')) if path.is_file() }

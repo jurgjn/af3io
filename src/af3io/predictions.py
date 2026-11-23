@@ -1,14 +1,15 @@
 
-import collections, contextlib, functools, glob, gzip, itertools, io, json, math, os, re, zipfile
+import collections, contextlib, functools, glob, gzip, itertools, io, json, math, os, posixpath, re, zipfile
 from pprint import pprint
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 import numpy as np, scipy as sp, pandas as pd
 import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 
 import Bio, Bio.PDB
 
-from . import archive, residue_names
+from . import archive, compress, residue_names
 from .scores import chain_pair_reduce, chain_pair_ptm_from_pae, model_confidence, ptm_symm, min_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, clis, clia, ilis, ilia, n_contacts, n_interface_residues, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
@@ -17,16 +18,24 @@ class Predictions:
         Handles the change in "file name layout" (introduced in ~b78e215) where every output file now starts with the AlphaFold 3 job name..
         The zip archive can be nested in other archives and/or compressed, e.g. pools_5k.tar::pools_5k_0040f80.zip (see af3io.archive)
         Individual output files can be compressed (.gz, .zst), e.g. pools_5k_0040f80/pools_5k_0040f80_confidences.json.gz
+        The output directory can also be inside an af3io container, e.g. pools_5k.af3io::pools_5k/pools_5k_0040f80 (see af3io.compress)
         File paths (model_path, confidences_path, ...) always refer to uncompressed names relative to the parent of the output directory
     """
     def __init__(self, path):
         # find/assign name (from path); nested locators are kept as strings as they're not valid file system paths
         self.path = str(path) if archive.is_nested(path) else Path(path)
         self._stack = contextlib.ExitStack()
+        self._zip = self._container = None
         if isinstance(self.path, Path) and self.path.is_dir():
             self.name = self.path.absolute().name
-            self._zip = None
             self.file_list = sorted(f'{self.name}/{Path(root, file).relative_to(self.path).as_posix()}' for root, dirs, files in os.walk(self.path) for file in files)
+        elif _is_container_locator(path):
+            image, subpath = archive.split(path)
+            subpath = subpath.strip('/')
+            self.name = posixpath.basename(subpath)
+            self._container = self._stack.enter_context(compress.open(image))
+            self._container_prefix = subpath[:-len(self.name)] # file names in the container are relative to its root
+            self.file_list = [ name[len(self._container_prefix):] for name in self._container.namelist(subpath) ]
         else:
             self.name = PurePosixPath(archive.strip_compression(archive.split(path)[-1])).stem
             self._zip = self._stack.enter_context(zipfile.ZipFile(self._stack.enter_context(archive.open(self.path, seekable=True))))
@@ -81,7 +90,9 @@ class Predictions:
     @contextlib.contextmanager
     def open(self, file):
         stored_name = self._stored_names[file]
-        if self._zip is not None:
+        if self._container is not None:
+            fh_stored = self._container.open(self._container_prefix + stored_name)
+        elif self._zip is not None:
             fh_stored = self._zip.open(stored_name)
         else:
             fh_stored = open(self.path / PurePosixPath(stored_name).relative_to(self.name), 'rb')
@@ -91,6 +102,14 @@ class Predictions:
     def _read(self, file):
         with self.open(file) as fh:
             return io.BytesIO(fh.read())
+
+    def read_confidences(self, file):
+        """Confidences JSON (e.g. confidences_path) as a dict, with PAE and contact probabilities as numpy arrays"""
+        with self.open(file) as fh:
+            js = json.load(fh)
+        for key in ('pae', 'contact_probs'):
+            js[key] = np.array(js[key], dtype=float)
+        return js
 
     def read_summary_confidences(self):
         def parse_(path):
@@ -120,16 +139,31 @@ def _is_ranking_scores(path):
     path = PurePosixPath(archive.strip_compression(path))
     return path.name in ('ranking_scores.csv', f'{path.parent.name}_ranking_scores.csv')
 
+def _is_container_locator(path):
+    # <image>.af3io::<path to output directory>
+    parts = archive.split(path)
+    return len(parts) == 2 and compress.is_container(parts[0])
+
+def _find_container_predictions(image):
+    with compress.open(image) as reader:
+        for name in reader.namelist():
+            if _is_ranking_scores(name) and posixpath.dirname(name) != '':
+                yield archive.join(image, posixpath.dirname(name))
+
 def find_predictions(path):
     """Yield paths/locators of predictions under path, which can be a directory, a single prediction, or a
     (nested) archive of predictions, e.g. a tar file of zip files (see af3io.archive). A prediction is either
     a zip file with a top-level <name>/<name>_ranking_scores.csv, or a directory <name> on disk with a
-    <name>_ranking_scores.csv (individual files can be compressed, e.g. <name>_ranking_scores.csv.gz).
+    <name>_ranking_scores.csv (individual files can be compressed, e.g. <name>_ranking_scores.csv.gz). Predictions in
+    af3io containers (.af3io, see af3io.compress) are listed as <image>.af3io::<path to output directory>.
     """
     seen = set()
     for locator in archive.walk(path):
         *parents, member = archive.split(locator)
-        if len(parents) == 0: # file on disk
+        if len(parents) == 0 and compress.is_container(member):
+            yield from _find_container_predictions(member)
+            continue
+        elif len(parents) == 0: # file on disk
             prediction = str(Path(member).parent) if _is_ranking_scores(member) and Path(member).parent.name != '' else None
         elif len(PurePosixPath(member).parts) == 2 and _is_ranking_scores(member) \
                 and PurePosixPath(archive.strip_compression(parents[-1])).suffix.lower() == '.zip':
@@ -308,3 +342,50 @@ def read_model(path):
     with Predictions(path) as p:
         with p.open(p.model_path) as fh:
             return fh.read().decode()
+
+class Prediction(NamedTuple):
+    """A predicted structure with its PAE and contact probabilities, see stream_predictions"""
+    name: str                   # job name (top-ranked model), or <job name>/seed-<seed>_sample-<sample>
+    model: str                  # structure (mmCIF) as text
+    pae: np.ndarray
+    contact_probs: np.ndarray
+    chain1: str = None          # chain pair of the pae/contact_probs blocks with chain_pairs=True
+    chain2: str = None
+
+def _is_under(name, subpath):
+    subpath = subpath.strip('/')
+    return subpath == '' or name == subpath or name.startswith(subpath + '/')
+
+def stream_predictions(path, subpath='', top_model_only=True, chain_pairs=False):
+    """Yield Prediction(name, model, pae, contact_probs, chain1, chain2) for the predictions under path (a
+    directory, (nested) archive, or af3io container, see find_predictions), e.g.:
+
+        for (name, model, pae, contact_probs, chain1, chain2) in stream_predictions('pools.af3io'):
+            ...
+
+    subpath restricts predictions to those under it (relative to path, or to the root of an af3io container).
+    With top_model_only=False, yield every sample (in the order of ranking_scores.csv) instead of the top-ranked
+    model. With chain_pairs=True, yield the pae/contact_probs blocks of every (ordered) pair of chains separately.
+    """
+    if compress.is_container(path) and os.path.isfile(path):
+        locators = ( locator for locator in _find_container_predictions(path) if _is_under(archive.split(locator)[1], subpath) )
+    else:
+        locators = find_predictions(os.path.join(path, subpath) if subpath.strip('/') != '' else path)
+    for locator in locators:
+        with Predictions(locator) as pred:
+            if top_model_only:
+                models = [ (pred.name, pred.model_path, pred.confidences_path) ]
+            else:
+                models = [ (f'{pred.name}/seed-{seed}_sample-{sample}', model_path, confidences_path) for seed, sample, model_path, confidences_path in
+                    pred.ranking_scores[['seed', 'sample', 'model_path', 'confidences_path']].itertuples(index=False) ]
+            for name, model_path, confidences_path in models:
+                with pred.open(model_path) as fh:
+                    model = fh.read().decode()
+                js = pred.read_confidences(confidences_path)
+                if not chain_pairs:
+                    yield Prediction(name, model, js['pae'], js['contact_probs'])
+                    continue
+                chain_ids = np.asarray(js['token_chain_ids'])
+                for chain1, chain2 in itertools.product(dict.fromkeys(chain_ids), repeat=2):
+                    block = np.ix_(chain_ids == chain1, chain_ids == chain2)
+                    yield Prediction(name, model, js['pae'][block], js['contact_probs'][block], chain1, chain2)

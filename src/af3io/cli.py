@@ -375,3 +375,107 @@ def summary_confidences(jobs, predictions, output_parquet):
         summary_confidences.to_parquet(output_parquet, compression='zstd')
         click.echo(f'Write:\t{output_parquet} ({len(summary_confidences)} rows)', err=True)
     click.echo(f'Finished in {humanfriendly.format_timespan(time.monotonic() - time_start)}', err=True)
+
+def _progressbar(label):
+    # Progress bar on stderr for af3io.compress.compress/decompress, called with the total number of files
+    return lambda total: click.progressbar(length=total, label=label, show_pos=True, file=sys.stderr)
+
+@cli.command(short_help='Compress AlphaFold 3 inputs/outputs into a single file')
+@click.option('--extract-archives/--no-extract-archives', default=True, show_default=True,
+    help='Unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression.')
+@click.option('--files-from', type=click.File('r'), default=None,
+    help='File with paths to compress, one per line (in addition to SOURCES).')
+@click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
+@click.argument('sources', nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
+def compress(extract_archives, files_from, jobs, sources, dest):
+    """Compress files and directories in SOURCES into a single file DEST
+    (.af3io, a squashfs image), e.g.:
+
+        af3io compress af3io-testdata/mgen_pools_5k_top3 mgen_pools_5k_top3.af3io
+
+    Each of SOURCES is added under its base name (like cp -r), so the example
+    above stores files as mgen_pools_5k_top3/pools_5k_0040f80/... in DEST. By
+    default, archives (.tar, .zip) and compressed files (.gz, .zst) are
+    replaced by their contents, e.g. confidences.json.zst is stored (and
+    decompressed) as confidences.json.
+
+    Decompressing reproduces every file bit-identically, which is verified
+    for every file at compression and decompression time.
+    """
+    import af3io.compress
+    time_start = time.monotonic()
+    sources = list(sources)
+    if files_from is not None:
+        for line in files_from:
+            if line.strip() != '':
+                path = Path(line.rstrip('\n'))
+                if not path.exists():
+                    raise click.UsageError(f'{path} (from --files-from) does not exist')
+                sources.append(path)
+    if len(sources) == 0:
+        raise click.UsageError('No files to compress, specify SOURCES and/or --files-from')
+    if dest.exists():
+        raise click.UsageError(f'{dest} already exists')
+    settings = af3io.compress.Settings(extract_archives=extract_archives)
+    try:
+        manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progressbar('Compressing'))
+    except (ValueError, FileExistsError) as e:
+        raise click.ClickException(str(e))
+    stats = manifest['stats']
+    size_in, size_out = sum(stats['uncompressed'].values()), dest.stat().st_size
+    click.echo(f'Write:\t{dest} ({sum(stats["files"].values())} files, {humanfriendly.format_size(size_in)} => {humanfriendly.format_size(size_out)})', err=True)
+    if sum(stats['fallbacks'].values()) > 0:
+        click.echo(f'Stored as-is as compression could not be verified: {dict(stats["fallbacks"])}', err=True)
+    click.echo(f'Finished in {humanfriendly.format_timespan(time.monotonic() - time_start)}', err=True)
+
+@cli.command(short_help='Decompress files from an af3io container')
+@click.option('--force', '-f', is_flag=True, default=False, help='Overwrite existing files.')
+@click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
+@click.argument('image', type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument('patterns', nargs=-1)
+@click.argument('dest', type=click.Path(file_okay=False, path_type=Path))
+def decompress(force, jobs, image, patterns, dest):
+    """Decompress files from IMAGE (an af3io container) into the directory DEST, e.g.:
+
+        af3io decompress mgen_pools_5k_top3.af3io .
+
+    Optional PATTERNS select files to decompress by name (shell-style
+    wildcards, see fnmatch, where * also matches /), a pattern matching a
+    directory selects all files under it, e.g.:
+
+        af3io decompress mgen_pools_5k_top3.af3io 'mgen_pools_5k_top3/pools_5k_0040f80/*' ./new_path
+
+    Every file is verified against the checksum of its original contents.
+    """
+    import af3io.compress
+    try:
+        names = af3io.compress.decompress(image, dest, patterns, jobs=jobs, force=force, progress=_progressbar('Decompressing'))
+    except (KeyError, FileExistsError, af3io.compress.ChecksumError) as e:
+        raise click.ClickException(str(e).strip('\'"'))
+    click.echo(f'Write:\t{len(names)} files to {dest}', err=True)
+
+@cli.command(short_help='Show sizes of an af3io container by file type')
+@click.argument('image', type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def info(image):
+    """Show uncompressed and compressed sizes of IMAGE (an af3io container) by
+    type of file: data pipeline output (data), predicted structures (model),
+    PAE and contact probability matrices (pae, contact_probs), the remaining
+    parts of confidences JSONs (confidences), all other files (other), and
+    squashfs metadata (squashfs). Does not decompress any files.
+    """
+    import af3io.compress
+    with af3io.compress.open(image) as reader:
+        df = reader.info()
+        manifest = reader.manifest
+    stats = manifest['stats']
+    click.echo(f'{image}: af3io {manifest["af3io_version"]}, {sum(stats["files"].values())} files')
+    click.echo(f'settings: {", ".join(f"{key}={value}" for key, value in manifest["settings"].items())}')
+    if sum(stats['fallbacks'].values()) > 0:
+        click.echo(f'fallbacks (stored as-is as compression could not be verified): {stats["fallbacks"]}')
+    if sum(stats.get('dropped', {}).values()) > 0:
+        click.echo(f'dropped: {stats["dropped"]}')
+    click.echo(f'{"":15}{"files":>8}{"uncompressed":>14}{"compressed":>12}{"ratio":>8}')
+    for cat, row in df.iterrows():
+        ratio = f'{row["uncompressed"] / row["compressed"]:.1f}x' if row['compressed'] > 0 and row['uncompressed'] > 0 else ''
+        click.echo(f'{cat:15}{row["files"]:8d}{humanfriendly.format_size(row["uncompressed"]):>14}{humanfriendly.format_size(row["compressed"]):>12}{ratio:>8}')
