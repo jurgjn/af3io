@@ -16,7 +16,7 @@ All files are kept in a squashfs container (.af3io extension), compressed with `
 - `/contents/confidences/<path>`
 - `/contents/data/<path>`
 - `/contents/model/<path>`
-- `/contents/other/<path>` compresses the overall summary table (`ranking_scores.csv`), sample-specific summary confidenes JSON, AlphaFold3 weights license.
+- `/contents/other/<path>` compresses the overall summary table (`ranking_scores.csv`), sample-specific summary confidences JSON, AlphaFold3 weights license.
 
 Specifically, data JSONs, confidences JSONs, and model CIFs take up the majority of space and have bespoke compression; all other files are added to `/contents/other/<path>` with squashfs compression and deduplication (e.g. license file is identical across all outputs).
 
@@ -34,7 +34,7 @@ Individual parts of data JSONs, confidences JSONs, and model CIFs (e.g. `contact
 - `/blobs/model/header/<sha256>`
 - `/blobs/model/<category>/<sha256>`
 
-Here `<sha256>` refers to the checksum of the decompressed content (exact replaced bytes); when storing on sqhuashfs, first two characters are used for a prefix directory like in git. This layout makes it easy to determine the total space after compression by file type. , e.g. for confidences files, can just sum up sizes for `/blobs/confidences` and `/contents/confidences`. Blob contents in the original file is replaced by `af3io://` followed by the absolute path of the blob in the container, e.g.:
+Here `<sha256>` refers to the checksum of the decompressed content (exact replaced bytes); when storing on squashfs, first two characters are used for a prefix directory like in git. This layout makes it easy to determine the total space after compression by file type, e.g. for confidences files, can just sum up sizes for `/blobs/confidences` and `/contents/confidences`. Blob contents in the original file are replaced by `af3io://` followed by the absolute path of the blob in the container, e.g.:
 ```
 af3io:///blobs/confidences/pae/58/58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd
 ```
@@ -47,7 +47,7 @@ There's a manifest file at `/af3io_manifest.json` that contains the af3io versio
 - Unrecognised files are assumed to be relevant post-processing results and added using squashfs default compression to `/contents/other/<path>`
 - AlphaFold3 output naming patterns are documented in `af3io.predictions.Predictions`
 - Minimal squashfs metadata - no permissions, user id, dates/times etc
-- Use squashfs file attributes to store a hash of the original, uncompressed contents (and verify by default when uncompressing). For lossy compressors, the has is on lossy contents formatted as lossless contents (so verification still picks up data corruption)
+- Use squashfs file attributes to store a hash of the original, uncompressed contents (and verify by default when uncompressing). For lossy compressors, the hash is on lossy contents formatted as lossless contents (so verification still picks up data corruption)
 - Compression should be as agnostic as possible to formatting changes between AlphaFold3 versions
 - Every targeted method is verified per file at compression time (decompress and compare with the original); if the result is not identical, the file is stored as-is under /contents/other/<path> and counted as a fallback in `info`. That also covers future AlphaFold 3 versions and unusual inputs
 - Every file is verified against the hash stored in the file attribute at decompression
@@ -66,10 +66,10 @@ af3io decompress mgen_pools_5k_top3.af3io 'pools_5k_0040f80/*' ./new_path # deco
 - error if destination image already exists
 - `--extract-archives`/`--no-extract-archives` to avoid double-compression, decompress generic compression as already implemented for summary_confidences (.tar, .zip , .gz, .zst) before compression
     - default is enabled
-    - contents of the archives is added in place of the archive
-    - duplicates (input has both confidences.json and confidences.json.gz) is aborted with an error during compression
+    - contents of the archives are added in place of the archive
+    - duplicates (input has both confidences.json and confidences.json.gz) are aborted with an error during compression
     - `decompress` does not re-build the archives, it decompresses as regular files (so e.g. confidences.json.gz becomes confidences.json)
-- `--files-from` specifies a list of files-paths (one per line) to compress
+- `--files-from` specifies a list of file paths (one per line) to compress
     - each listed path is added at the root under its basename /x/y/pools_5k_0040f80 as pools_5k_0040f80/
     - `--files-from` can point to real files on the disk, not inside compressed files
 
@@ -93,9 +93,9 @@ af3io decompress mgen_pools_5k_top3.af3io 'pools_5k_0040f80/*' ./new_path # deco
     - PAE matrices are [partially symmetric](https://github.com/google-deepmind/alphafold3/issues/619)
     - values range from 0 to approx. 32 with one decimal digit
     - take advantage of the "block structure" defined by the chains in `token_chain_ids`; specifically, within-chain blocks (diagonal) have a different signal than between-chain blocks
-        - alternativelly, define an even finer "block structure" by thresholding on (smoothed?) PAE values, e.g. something like 15A
+        - alternatively, define an even finer "block structure" by thresholding on (smoothed?) PAE values, e.g. something like 15A
         - possibly specialised compressors for on-diagonal vs off-diagonal blocks
-    - adapt JPEG XL lossless via `imagecodecs` as the image codec, do optimise compression parameteres/filters
+    - adapt JPEG XL lossless via `imagecodecs` as the image codec, do optimise compression parameters/filters
     - final format should, ideally, allow for fast random access to individual chain pair matrices; for example, uncompressed zip container of the per-block-pair jxls, e.g. A_B.jxl
     - exact confidences contact_probs/pae formatting (for round-tripping) is already implemented in af3io.confidences
 
@@ -111,14 +111,14 @@ af3io decompress mgen_pools_5k_top3.af3io 'pools_5k_0040f80/*' ./new_path # deco
 ### Predicted structures (`--compress-model`)
 `--compress-model`/`--no-compress-model` (default on) compress model CIFs (`*model.cif`) losslessly
 - Each category (CIF split at #), apart from the data_ line, becomes a blob under `/blobs/model/<category>/<ab>/<sha256>`, named after its first item, e.g. `/blobs/model/_chem_comp/3f/3fa9...`. Text before the data_ line (the license header) goes in /blobs/model/header/
-- In /contents/model/<path>, The # separators and the data_ line stay in the stub as they are. each section is replaced by its own reference line; sections below the size threshold stay inline e.g. af3io:///blobs/model/_chem_comp/3f/3fa9.... A line starting with af3io:// isn't valid CIF syntax, so it can't be confused with real content
+- In /contents/model/<path>, the # separators and the data_ line stay in the stub as they are. Each section is replaced by its own reference line; sections below the size threshold stay inline e.g. af3io:///blobs/model/_chem_comp/3f/3fa9.... A line starting with af3io:// isn't valid CIF syntax, so it can't be confused with real content
 - Four large tables stored as parquet files under:
     - `/blobs/model/_atom_site/<sha256>`
     - `/blobs/model/_entity_poly_seq/<sha256>`
     - `/blobs/model/_ma_qa_metric_local/<sha256>`
     - `/blobs/model/_pdbx_poly_seq_scheme/<sha256>`
 - Parquet metadata may contain additional information to reproduce formatting exactly e.g. padding
-- parquet column types chosen intelligently e.g. chains id-s are few discrete values so some kind of repeate encoding; coordinates with delta encoding etc
+- parquet column types chosen intelligently e.g. chain IDs are few discrete values so some kind of repeat encoding; coordinates with delta encoding etc
 - Only externalise sections above a size threshold (e.g. 256 bytes feel free to adjust) and leave smaller ones inline.
 
 ### Lossy options
@@ -162,4 +162,4 @@ Max motivation/use case for developing this: 10% shards of roughly 300,000 pools
 
 # Open questions
 - Ideally, Predictions would open several "shards" as one file but leave for now
-- Model coordinates could be compressed more aggressivelly using specialised compression like foldcomp; leave for now
+- Model coordinates could be compressed more aggressively using specialised compression like foldcomp; leave for now
