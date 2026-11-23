@@ -315,6 +315,8 @@ def _progressbar(label):
 @click.option('--no-compress-pae', 'pae', flag_value='none', help='Store PAE matrices as-is (compressed by squashfs only).')
 @click.option('--compress-contact-probs/--no-compress-contact-probs', default=True, show_default=True,
     help='Compress contact probabilities in confidences JSONs as images (lossless), once per seed.')
+@click.option('--compress-model/--no-compress-model', default=True, show_default=True,
+    help='Compress predicted structures (*model.cif), with large tables (e.g. _atom_site) as parquet files.')
 @click.option('--extract-archives/--no-extract-archives', default=True, show_default=True,
     help='Unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression.')
 @click.option('--files-from', type=click.File('r'), default=None,
@@ -322,7 +324,7 @@ def _progressbar(label):
 @click.option('--jobs', '-j', default=None, type=int, help='Number of parallel worker processes  [default: available CPUs].')
 @click.argument('sources', nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
-def compress(data, pae, compress_contact_probs, extract_archives, files_from, jobs, sources, dest):
+def compress(data, pae, compress_contact_probs, compress_model, extract_archives, files_from, jobs, sources, dest):
     """Compress files and directories in SOURCES into a single file DEST
     (.af3io, a squashfs image), e.g.:
 
@@ -337,7 +339,9 @@ def compress(data, pae, compress_contact_probs, extract_archives, files_from, jo
     Data pipeline JSONs (*_data.json) are compressed by storing the MSAs
     and templates of each sequence once, however many predictions use them.
     PAE and contact probability matrices in confidences JSONs are stored as
-    lossless images (JPEG XL), contact probabilities once per seed.
+    lossless images (JPEG XL), contact probabilities once per seed. Large
+    tables of predicted structures (*model.cif, e.g. _atom_site) are stored
+    as parquet files with typed columns.
 
     Decompressing reproduces every file bit-identically, which is verified
     for every file at compression and decompression time.
@@ -356,7 +360,7 @@ def compress(data, pae, compress_contact_probs, extract_archives, files_from, jo
         raise click.UsageError('No files to compress, specify SOURCES and/or --files-from')
     if dest.exists():
         raise click.UsageError(f'{dest} already exists')
-    settings = af3io.compress.Settings(data=data, pae=pae, contact_probs=compress_contact_probs, extract_archives=extract_archives)
+    settings = af3io.compress.Settings(data=data, pae=pae, contact_probs=compress_contact_probs, model=compress_model, extract_archives=extract_archives)
     try:
         manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progressbar('Compressing'))
     except (ValueError, FileExistsError) as e:

@@ -1,4 +1,4 @@
-import gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
+import functools, gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
@@ -27,6 +27,7 @@ def test_squashfs(tmp_path):
         'a/b/blocks.bin': np.random.default_rng(0).integers(0, 255, size=3 * (1 << 17) + 123, dtype=np.uint8).tobytes(),
         'a/b/exact.bin': bytes(range(256)) * (1 << 10),
         'a/copy.txt': b'hello',
+        'a/random.bin': np.random.default_rng(1).integers(0, 255, size=5000, dtype=np.uint8).tobytes(),
         'z.txt': b'z' * 100_000,
     }
     image = tmp_path / 'test.af3io'
@@ -53,6 +54,12 @@ def test_squashfs(tmp_path):
         usage = fs.disk_usage(found.items())
         assert usage['/a/copy.txt'] == 0 or usage['/a/small.txt'] == 0 # duplicates are stored (and counted) once
         assert 0 < sum(usage.values()) < image.stat().st_size
+        # Fragment blocks shared by compressible and incompressible (random) files
+        assert found['/a/random.bin'].fragment == found['/z.txt'].fragment != squashfs.NONE32
+        usage_estimate = fs.disk_usage(found.items(), estimate=functools.partial(zstd.compress, level=3))
+        assert usage['/a/random.bin'] < 1000 # in proportion to uncompressed size, which is far off
+        assert usage_estimate['/a/random.bin'] > 4900 # in proportion to sizes compressed on their own
+        assert sum(usage_estimate.values()) == pytest.approx(sum(usage.values()))
 
     if shutil.which('unsquashfs') is not None: # matches squashfs-tools
         out = tmp_path / 'unsquashfs'
@@ -391,3 +398,65 @@ def test_compress_contact_probs(alphafold3_examples_dir, alphafold3_examples_af3
             if len(blobs) > 0:
                 assert not matrix.read_index(reader.fs.read(blobs[0][1]))['symmetric']
             np.testing.assert_array_equal(reader.read_confidences('pred/x_confidences.json')['contact_probs'], np.array(cp))
+
+def test_model_loop():
+    from af3io.compress import model
+    import pyarrow.parquet as pq
+    rows = [
+        [b'ATOM', b'1', b'N', b'N', b'.', b'1', b'0.932', b'-20.839', b'1.00', b'"C1\'"'],
+        [b'HETATM', b'2', b'C', b'CA', b'?', b'.', b'-0.000', b'5.000', b'1.00', b'A'],
+        [b'ATOM', b'10', b'O', b'OXT', b'.', b'12', b'1.670', b'0.001', b'1.00', b'ALA'],
+    ]
+    names = [b'group_PDB', b'id', b'type_symbol', b'label_atom_id', b'label_alt_id', b'label_seq_id', b'Cartn_x', b'Cartn_y', b'occupancy', b'quoted']
+    widths = [ max(len(row[i]) for row in rows) for i in range(len(names)) ]
+    raw = b'loop_\n' + b''.join(b'_atom_site.' + name + b'\n' for name in names) + \
+        b''.join(b''.join(token.ljust(width) + b' ' for token, width in zip(row, widths)) + b'\n' for row in rows)
+    blob = model.encode_loop(raw)
+    assert blob[:4] == b'PAR1' and model.decode_loop(blob) == raw
+    table = pq.read_table(io.BytesIO(blob))
+    assert table.column_names == [ name.decode() for name in names ]
+    assert table['id'].to_pylist() == [1, 2, 10] and table['label_seq_id'].to_pylist() == [1, None, 12]
+    assert table['Cartn_y'].to_pylist() == [-20839, 5000, 1] # fixed-point decimals as integers
+    assert table['Cartn_x'].to_pylist() == ['0.932', '-0.000', '1.670'] # -0.000 is not an integer
+    assert table['label_alt_id'].to_pylist() == ['.', '?', '.'] # two kinds of nulls
+    for invalid in [raw.replace(b'"C1\'"', b'"C1 \'"'), b'_entry.id x\n', b'loop_\n_a.b\n']:
+        with pytest.raises(ValueError):
+            model.encode_loop(invalid)
+    # Loops that are not padded as expected are stored as text
+    unpadded = raw.replace(b'-20.839 ', b'-20.839')
+    assert model.encode_blob(af3io.compress.codec.Span('blobs/model/_atom_site/ab/abc', '_atom_site', unpadded, 'model'), None) == unpadded
+
+def test_compress_model(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
+    import pyarrow.parquet as pq
+    from af3io.compress import model
+    expected = decompressed_contents(alphafold3_examples_dir)
+    names = [ name for name in expected if af3io.compress.classify(name) == 'model' ]
+    with af3io.compress.open(alphafold3_examples_af3io) as reader:
+        assert reader.manifest['stats']['fallbacks'] == {}
+        stub = reader.fs.read('/contents/model/alphafold3_predictions/barnase_barstar/barnase_barstar_model.cif').splitlines()
+        assert stub[0].startswith(b'af3io:///blobs/model/header/') and stub[1] == b'data_barnase_barstar' and stub[2] == b'#'
+        assert b'_entry.id barnase_barstar' in stub # small sections stay inline
+        assert any(line.startswith(b'af3io:///blobs/model/_atom_site/') for line in stub)
+        assert len(list(reader.fs.walk('/blobs/model/header'))) == 1 # the same for all models
+        for category in model.PARQUET:
+            blobs = list(reader.fs.walk(f'/blobs/model/{category}'))
+            assert len(blobs) > 0 and all(reader.fs.read(inode)[:4] == b'PAR1' for _, inode in blobs)
+        table = pq.read_table(io.BytesIO(reader.fs.read(next(reader.fs.walk('/blobs/model/_atom_site'))[1])))
+        assert str(table.schema.field('Cartn_x').type) == 'int32'
+        for name in names:
+            assert reader.read(name) == expected[name]
+        df = reader.info()
+        assert df.loc['model', 'uncompressed'] > 5 * df.loc['model', 'compressed']
+
+    # Files without a data_ line are stored as-is
+    (tmp_path / 'pred').mkdir()
+    files = { 'pred/x_model.cif': b'# no data line\n' + b'_entry.id x\n' * 100, 'pred/y_model.cif': expected[names[0]] }
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    for setting in [True, False]:
+        image = tmp_path / f'{setting}.af3io'
+        af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(model=setting), jobs=1)
+        with af3io.compress.open(image) as reader:
+            assert dict(reader.iter()) == files
+            assert reader.manifest['stats']['fallbacks'] == ({ 'model': 1 } if setting else {})
+            assert (reader.fs.lookup('/blobs/model') is not None) == setting

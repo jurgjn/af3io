@@ -12,7 +12,11 @@
     Containers are written with sqfstar from squashfs-tools (a tar stream with xattrs in PAX headers) and read
     with af3io.compress.squashfs.
 """
-import collections, hashlib, io, json, os, posixpath, shutil, subprocess, tarfile, tempfile
+import collections, functools, hashlib, io, json, os, posixpath, shutil, subprocess, tarfile, tempfile
+try:
+    from compression import zstd # Python >= 3.14
+except ImportError:
+    from backports import zstd
 
 import pandas as pd
 
@@ -72,6 +76,9 @@ def codec(kind):
     elif kind == 'confidences':
         from . import confidences
         return confidences
+    elif kind == 'model':
+        from . import model
+        return model
     return None
 
 class Writer:
@@ -260,7 +267,9 @@ class Container:
         """Uncompressed (original) and compressed (on-disk) bytes by size category as a data frame"""
         files = list(self.fs.walk('/'))
         compressed = collections.Counter()
-        for path, size in self.fs.disk_usage(files).items():
+        # Small files share blocks (fragments), which are split in proportion to the sizes of their parts compressed on their own
+        estimate = functools.partial(zstd.compress, level=3)
+        for path, size in self.fs.disk_usage(files, estimate=estimate).items():
             compressed[category(path)] += size
         compressed['squashfs'] += os.path.getsize(self.path) - sum(compressed.values())
         n_files = collections.Counter(category(path) for path, _ in files if path.startswith('/contents/'))

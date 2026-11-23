@@ -300,10 +300,11 @@ class SquashFS:
             xattrs[name] = value
         return xattrs
 
-    def disk_usage(self, files):
+    def disk_usage(self, files, estimate=None):
         """On-disk (compressed) bytes for each of files, an iterable of (key, inode): {key: bytes}
-        Data shared between files (duplicates removed by mksquashfs) is counted once, for the first file;
-        fragment blocks (tail ends of several files) are split in proportion to the uncompressed tail sizes.
+        Data shared between files (duplicates removed by mksquashfs) is counted once, for the first file. Fragment blocks
+        (small files and tail ends of several files compressed together) are split in proportion to the uncompressed tail
+        ends, or with estimate (e.g. zstd.compress), in proportion to len(estimate(tail end)).
         """
         usage, seen, fragments = {}, set(), {}
         for key, inode in files:
@@ -315,10 +316,15 @@ class SquashFS:
             usage[key] = sum(size & ~BLOCK_UNCOMPRESSED for size in inode.block_sizes)
             if inode.fragment != NONE32:
                 tail = inode.size - self.block_size * len(inode.block_sizes)
-                fragments.setdefault(inode.fragment, []).append((key, tail))
+                fragments.setdefault(inode.fragment, []).append((key, inode.fragment_offset, tail))
         for index, tails in fragments.items():
             disk_size = self._fragment_entry(index)[1] & ~BLOCK_UNCOMPRESSED
-            total = sum(tail for _, tail in tails)
-            for key, tail in tails:
-                usage[key] += disk_size * tail / total if total > 0 else 0
+            if estimate is None:
+                weights = [ tail for _, _, tail in tails ]
+            else:
+                block = self._fragment_block(index)
+                weights = [ len(estimate(block[offset:offset + tail])) if tail > 0 else 0 for _, offset, tail in tails ]
+            total = sum(weights)
+            for (key, _, _), weight in zip(tails, weights):
+                usage[key] += disk_size * weight / total if total > 0 else 0
         return usage

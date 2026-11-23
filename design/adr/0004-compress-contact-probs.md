@@ -51,12 +51,12 @@ prediction (in earlier stages, stored within confidences JSONs, and their share 
 | uncompressed | 1.960 MB | 619.5 MB |
 | zip | 0.051 MB | 2.57 MB |
 | squashfs (zstd 19) | 0.032 MB | 1.63 MB |
-| `--compress-contact-probs` | 0.001 MB | 0.03 MB |
+| `--compress-contact-probs` | 0.003 MB | 0.08 MB |
 
 All files per prediction, `--drop-data --compress-pae --compress-contact-probs`: 0.305 MB (examples) and 18.2 MB (pools), 11.3x
 and 8.1x smaller than zip.
 
 ## Consequences
 
-- Contact probabilities shrink by ~1000x (310 MB of text to 0.3 MB per pool), so they no longer matter for the size of a
+- Contact probabilities shrink by ~1000x (103 MB of text to 0.1 MB per pool), so they no longer matter for the size of a
   container; their copies across samples cost nothing.

@@ -111,8 +111,10 @@ The reader also exposes the on-disk block sizes of every file, which `info` need
   `--force`, as decompressing a lossy container over its originals would silently replace them.
 - `af3io info IMAGE`: uncompressed and compressed sizes by category (data, model, pae, contact_probs, rest of confidences JSONs,
   other files, squashfs metadata). Uncompressed sizes are totals recorded in the manifest at compression time; compressed sizes
-  are summed from the block lists of all files, counting deduplicated data once and splitting fragment blocks in proportion to
-  the tail ends they contain.
+  are summed from the block lists of all files, counting deduplicated data once. Fragment blocks (small files and tail ends of
+  several files compressed together) are split in proportion to the sizes of their parts compressed on their own (zstd level
+  3), which needs reading (but not re-generating) small files; sizes by category of small files are therefore estimates,
+  the total is exact.
 
 ### Python interface
 

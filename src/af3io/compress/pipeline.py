@@ -12,6 +12,7 @@ class Settings:
     data: str = 'compress'          # data pipeline JSONs: compress (af3io.compress.data), store (as-is), or drop
     pae: str = 'lossless'           # PAE matrices in confidences JSONs: lossless (af3io.compress.confidences) or none
     contact_probs: bool = True      # contact probability matrices in confidences JSONs (af3io.compress.confidences)
+    model: bool = True              # predicted structures (af3io.compress.model)
     extract_archives: bool = True   # unpack archives and compressed files (.tar, .zip, .gz, .zst) before compression
     level: int = 19                 # zstd compression level of the squashfs image
     block_size: int = 1 << 20       # squashfs block size
@@ -303,6 +304,7 @@ def decompress(image, dest, patterns=(), jobs=None, force=False, progress=_NoPro
     exists already (unless force) and KeyError if a pattern matches no files.
     """
     jobs = jobs or default_jobs()
+    image, dest = os.path.abspath(image), os.path.abspath(dest) # workers may run in a different directory
     with Container(image) as reader:
         names = reader.namelist()
     if len(patterns) > 0:

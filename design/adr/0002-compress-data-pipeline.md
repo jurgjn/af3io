@@ -54,7 +54,8 @@ many pools.
 - squashfs packs small files and tail ends into shared fragment blocks in the order they are written, so the writer emits the
   files of a prediction grouped by kind (e.g. the models of all samples next to each other), then the new blobs. On the
   AlphaFold 3 examples this is 1% smaller than writing in path order. As blocks are shared, `info` splits their compressed size
-  in proportion to uncompressed bytes, so sizes by category are approximate for small files (the total is exact).
+  in proportion to the sizes of their parts compressed on their own (see ADR 0001), so sizes by category are estimates for
+  small files (the total is exact).
 
 ### Results
 

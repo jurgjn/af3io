@@ -80,8 +80,8 @@ earlier stages, PAE is stored within confidences JSONs, and its share is estimat
 |---|---|---|
 | uncompressed | 2.023 MB | 768.1 MB |
 | zip | 0.463 MB | 53.8 MB |
-| squashfs (zstd 19) | 0.281 MB | 29.0 MB |
-| `--compress-pae` | 0.057 MB | 13.8 MB |
+| squashfs (zstd 19) | 0.272 MB | 29.0 MB |
+| `--compress-pae` | 0.126 MB | 13.8 MB |
 
 All files per prediction, `--drop-data --compress-pae`: 0.319 MB (examples) and 19.7 MB (pools), 10.8x and 7.5x smaller than zip.
 

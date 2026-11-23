@@ -7,6 +7,7 @@ This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calve
 - Added compression of data pipeline JSONs to `compress` by storing MSAs and templates of each sequence once (`--compress-data`, default), or leaving them out (`--drop-data`), see design/adr/0002-compress-data-pipeline.md
 - Added compression of PAE matrices to `compress` as lossless JPEG XL images, one per pair of chains (`--compress-pae`, default), see design/adr/0003-compress-pae.md
 - Added compression of contact probabilities to `compress` as lossless JPEG XL images of the upper triangle, stored once per seed (`--compress-contact-probs`, default), see design/adr/0004-compress-contact-probs.md
+- Added compression of predicted structures to `compress`, with sections stored once and large tables (e.g. `_atom_site`) as parquet files with typed columns (`--compress-model`, default), see design/adr/0005-compress-model.md
 - Added reading predictions from af3io containers (`af3io.predictions.Predictions`, `summary-confidences`), and `af3io.predictions.stream_predictions` to iterate over models, PAE and contact probabilities of predictions in directories, archives or containers
 - Fixed `summary-confidences` failing on predictions with ligands, ions, nucleic acids, glycans or modified residues: structure-based scores are now computed per AlphaFold 3 token, and ipTM reported as null is kept as NaN
 
