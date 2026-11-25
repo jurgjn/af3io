@@ -23,6 +23,7 @@ def _skip(text, idx):
         raise ValueError(f'invalid JSON value at {idx}')
 
 _MATRIX_CHARS = b'0123456789.,[]'
+_WINDOW = 1 << 23
 
 def _skip_matrix(text, idx):
     # End of a matrix of numbers without spaces at idx, e.g. [[0.8,2.8],[3.0,0.05]], None if there is none. Brackets
@@ -36,8 +37,9 @@ def _skip_matrix(text, idx):
     n_rows = text.count('],[', idx, end) + 1
     if text.count('[', idx, end) != n_rows + 1 or text.count(']', idx, end) != n_rows + 1:
         return None
-    if len(text[idx:end].encode('latin-1', errors='replace').translate(None, _MATRIX_CHARS)) > 0:
-        return None
+    for start in range(idx, end, _WINDOW): # in windows, as copying large matrices takes as much memory as the document
+        if len(text[start:min(start + _WINDOW, end)].encode('latin-1', errors='replace').translate(None, _MATRIX_CHARS)) > 0:
+            return None
     return end
 
 def find(text, select):

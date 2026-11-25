@@ -21,6 +21,10 @@ INDEX = 'matrix.json'
 _ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 _CHAIN_ID = re.compile(r'[A-Za-z0-9]+')
 
+# Matrices are parsed and formatted in blocks of rows of about this many values, which limits memory use to a few MB
+# on top of the input and output (instead of ~10x the size of a matrix, e.g. ~1 GB for a PAE matrix of 5,000 tokens)
+_BLOCK = 1 << 20
+
 def parse(raw, decimals):
     """Matrix of non-negative decimal numbers (JSON text as bytes) as integers (values x 10^decimals), raises ValueError
     if raw is not such a matrix. Does not check formatting (compare format(parse(raw)) with raw for that).
@@ -28,18 +32,30 @@ def parse(raw, decimals):
     if not (raw.startswith(b'[[') and raw.endswith(b']]')):
         raise ValueError('not a matrix')
     import pyarrow as pa, pyarrow.compute as pc
-    n_rows = raw.count(b'],[') + 1
-    try: # ~2.5x faster than np.fromstring(..., sep=',')
-        tokens = pc.split_pattern(pa.array([raw[2:-2].replace(b'],[', b',')], type=pa.large_binary()), b',').flatten()
-        values = pc.cast(tokens, pa.float64()).to_numpy()
-    except Exception as e:
-        raise ValueError(f'not a matrix of numbers: {e}')
-    if values.size == 0 or values.size % n_rows != 0:
-        raise ValueError('not a matrix')
-    values = np.rint(values * 10**decimals)
-    if not (values.min() >= 0 and values.max() < 1 << 16):
-        raise ValueError('values out of range')
-    return values.astype(np.uint16).reshape(n_rows, -1)
+    pool = pa.system_memory_pool() # returns memory right away (the default pool keeps ~1 GB per process for re-use)
+    rows = raw.split(b'],[')
+    rows[0] = rows[0][2:]
+    rows[-1] = rows[-1][:-2]
+    n_rows, values = len(rows), None
+    step = max(1, _BLOCK // (rows[0].count(b',') + 1))
+    for start in range(0, n_rows, step):
+        block = rows[start:start + step]
+        try: # ~2.5x faster than np.fromstring(..., sep=',')
+            tokens = pc.split_pattern(pa.array([b','.join(block)], type=pa.large_binary(), memory_pool=pool), b',', memory_pool=pool).flatten()
+            floats = pc.cast(tokens, pa.float64(), memory_pool=pool).to_numpy()
+        except Exception as e:
+            raise ValueError(f'not a matrix of numbers: {e}')
+        if values is None:
+            if floats.size == 0 or floats.size % len(block) != 0:
+                raise ValueError('not a matrix')
+            values = np.empty((n_rows, floats.size // len(block)), dtype=np.uint16)
+        if floats.size != len(block) * values.shape[1]:
+            raise ValueError('not a matrix')
+        ints = np.rint(floats * 10**decimals)
+        if not (ints.min() >= 0 and ints.max() < 1 << 16):
+            raise ValueError('values out of range')
+        values[start:start + len(block)] = ints.reshape(len(block), -1)
+    return values
 
 def format(values, decimals):
     """Matrix of integers (values x 10^decimals) as JSON text without spaces, with numbers formatted like Python floats
@@ -48,12 +64,15 @@ def format(values, decimals):
     n_rows, n_cols = values.shape
     tokens = [ repr(k / 10**decimals).encode() + b',' for k in range(int(values.max()) + 1) ]
     width = max(map(len, tokens))
-    chars = np.array(tokens, dtype=f'S{width}')[values].view(np.uint8).reshape(n_rows, n_cols * width)
-    keep = chars != 0 # tokens are padded with null bytes
-    ends = np.cumsum(keep.sum(axis=1)).tolist()
-    flat = chars[keep].tobytes()
-    rows = [ flat[start:end - 1] for start, end in zip([0] + ends[:-1], ends) ] # without the trailing comma
-    return b'[[' + b'],['.join(rows) + b']]'
+    table = np.array(tokens, dtype=f'S{width}')
+    step, blocks = max(1, _BLOCK // max(1, n_cols)), []
+    for row in range(0, n_rows, step):
+        chars = table[values[row:row + step]].view(np.uint8).reshape(-1, n_cols * width)
+        keep = chars != 0 # tokens are padded with null bytes
+        ends = np.cumsum(keep.sum(axis=1)).tolist()
+        flat = chars[keep].tobytes()
+        blocks.append(b'],['.join(flat[start:end - 1] for start, end in zip([0] + ends[:-1], ends))) # without the trailing comma
+    return b'[[' + b'],['.join(blocks) + b']]'
 
 def chain_runs(chain_ids):
     """Runs of consecutive tokens of the same chain [(chain, start, end)] from token_chain_ids"""

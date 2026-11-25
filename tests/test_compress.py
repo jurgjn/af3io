@@ -1,4 +1,4 @@
-import functools, gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
+import concurrent.futures, functools, gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
@@ -130,7 +130,7 @@ def test_compress_reproducible(alphafold3_examples_dir, alphafold3_examples_af3i
     af3io.compress.compress([alphafold3_examples_dir], path, jobs=3)
     assert path.read_bytes() == alphafold3_examples_af3io.read_bytes()
 
-def test_compress_cli(alphafold3_examples_dir, tmp_path):
+def test_compress_cli(alphafold3_examples_dir, tmp_path, monkeypatch):
     runner = click.testing.CliRunner()
     source = alphafold3_examples_dir / 'barnase_barstar'
     image = tmp_path / 'barnase_barstar.af3io.sqfs'
@@ -145,6 +145,14 @@ def test_compress_cli(alphafold3_examples_dir, tmp_path):
 
     result = runner.invoke(af3io.cli.compress, [str(source), str(image)])
     assert result.exit_code != 0 and 'already exists' in result.output
+
+    # A worker process killed (e.g. out of memory) is reported with a hint
+    def killed(*args, **kwargs):
+        raise concurrent.futures.process.BrokenProcessPool('A process in the process pool was terminated abruptly')
+    with monkeypatch.context() as m:
+        m.setattr(af3io.compress, 'compress', killed)
+        result = runner.invoke(af3io.cli.compress, ['-j', '8', str(source), str(tmp_path / 'killed.af3io.sqfs')])
+    assert result.exit_code != 0 and 'ran out of memory' in result.output and '-j 4' in result.output, result.output
 
     # Paths from --files-from are checked while listing
     files_from.write_text(f'{source}\n{tmp_path / "missing.zip"}\n')

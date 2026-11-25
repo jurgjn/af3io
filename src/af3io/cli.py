@@ -1,5 +1,5 @@
 
-import collections, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, sys, time, zipfile, warnings
+import collections, concurrent.futures, contextlib, copy, filecmp, glob, io, itertools, json, os, os.path, subprocess, sys, time, zipfile, warnings
 import click, humanfriendly, numpy as np
 import af3io
 from pathlib import Path
@@ -420,6 +420,9 @@ def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_a
         manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progress)
     except (ValueError, FileExistsError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
+    except concurrent.futures.process.BrokenProcessPool:
+        raise click.ClickException('A worker process was killed, most likely as it ran out of memory (large predictions take '
+            f'up to ~2 GB per worker): use fewer worker processes (e.g. -j {max(1, jobs // 2)}) or more memory')
     stats = manifest['stats']
     size_in, size_out = sum(stats['uncompressed'].values()), dest.stat().st_size
     click.echo(f'Write:\t{dest} ({sum(stats["files"].values())} files, {humanfriendly.format_size(size_in)} => {humanfriendly.format_size(size_out)})', err=True)

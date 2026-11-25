@@ -133,7 +133,7 @@ def _has_refs(codec, data):
     except KeyError:
         return True
 
-def _encode(path, kind, codec, data, settings, blobs_done, known):
+def _encode(path, kind, codec, data, digest, settings, blobs_done, known):
     stub, spans = codec.split(data, settings)
     if codec.join(stub, { span.path: span.original for span in spans }.__getitem__) != data:
         raise VerificationError(f'{path}: stub does not re-generate the original')
@@ -147,12 +147,16 @@ def _encode(path, kind, codec, data, settings, blobs_done, known):
             raise VerificationError(f'{path}: blob {span.path} does not decompress to its contents')
         blobs[span.path] = blob
     blobs_done.update(blobs) # only once all parts of the file are compressed (as it is stored as-is otherwise)
-    contents = codec.join(stub, raws.__getitem__) # differs from data with lossy compression
+    if all(span.raw is span.original for span in spans): # lossless, i.e. contents are data (verified above)
+        contents = data
+    else: # differs from data with lossy compression
+        contents = codec.join(stub, raws.__getitem__)
+        digest = sha256(contents)
     uncompressed = collections.Counter({ kind: len(contents) })
     for span in spans:
         uncompressed[kind] -= len(span.raw)
         uncompressed[span.category] += len(span.raw)
-    return FileResult(path, kind, stub, sha256(contents), len(contents), list(blobs.items()), dict(uncompressed))
+    return FileResult(path, kind, stub, digest, len(contents), list(blobs.items()), dict(uncompressed))
 
 def compress_file(path, data, settings, cache=None, known=None):
     """Compress a single file, return FileResult. Blobs in known (paths of blobs written already) and in the cache
@@ -169,7 +173,7 @@ def compress_file(path, data, settings, cache=None, known=None):
     codec = container.codec(kind)
     if codec is not None and codec.enabled(settings):
         try:
-            result = _encode(path, kind, codec, data, settings, blobs_done, known)
+            result = _encode(path, kind, codec, data, digest, settings, blobs_done, known)
         except Exception: # incl. unexpected formats, see design/specs/compress.md
             result = FileResult(path, 'other', data, digest, len(data), [], {'other': len(data)}, fallback=kind)
     elif codec is not None and _has_refs(codec, data):
@@ -197,6 +201,7 @@ def _compress_group(group, settings):
     for path, locator in group:
         data = _read_input(locator, settings)
         results.append(compress_file(path, data, settings, cache, _known))
+        del data # before reading the next file
     return results
 
 def _imap(executor, fn, iterable, ahead):

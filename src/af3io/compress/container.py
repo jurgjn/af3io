@@ -147,6 +147,10 @@ class Writer:
     def abort(self):
         self._proc.kill()
         self._proc.wait()
+        try: # discard buffered data, which would fail to be written when the pipe is garbage-collected
+            self._proc.stdin.close()
+        except BrokenPipeError:
+            pass
         self._cleanup()
 
     def __enter__(self):
