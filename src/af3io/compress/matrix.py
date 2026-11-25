@@ -12,7 +12,7 @@
     as ions or ligands are merged with their neighbours (e.g. group B-C-D). For symmetric matrices, only blocks on and
     above the diagonal are stored, with the lower triangle of diagonal blocks set to zero.
 """
-import io, itertools, json, re, warnings, zipfile
+import io, itertools, json, re, zipfile
 
 import numpy as np
 
@@ -27,11 +27,11 @@ def parse(raw, decimals):
     """
     if not (raw.startswith(b'[[') and raw.endswith(b']]')):
         raise ValueError('not a matrix')
+    import pyarrow as pa, pyarrow.compute as pc
     n_rows = raw.count(b'],[') + 1
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error')
-            values = np.fromstring(raw[2:-2].replace(b'],[', b','), dtype=np.float64, sep=',')
+    try: # ~2.5x faster than np.fromstring(..., sep=',')
+        tokens = pc.split_pattern(pa.array([raw[2:-2].replace(b'],[', b',')], type=pa.large_binary()), b',').flatten()
+        values = pc.cast(tokens, pa.float64()).to_numpy()
     except Exception as e:
         raise ValueError(f'not a matrix of numbers: {e}')
     if values.size == 0 or values.size % n_rows != 0:

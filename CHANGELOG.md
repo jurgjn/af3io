@@ -10,6 +10,9 @@ This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calve
 - Added compression of predicted structures to `compress`, with sections stored once and large tables (e.g. `_atom_site`) as parquet files with typed columns (`--compress-model`, default), see design/adr/0005-compress-model.md
 - Added lossy compression of PAE matrices to `compress`, keeping values up to 15 Å and putting larger ones into 2 Å bins (`--compress-pae-lossy`, or `--lossy`), see design/adr/0006-compress-pae-lossy.md
 - Added reading predictions from af3io containers (`af3io.predictions.Predictions`, `summary-confidences`), and `af3io.predictions.stream_predictions` to iterate over models, PAE and contact probabilities of predictions in directories, archives or containers
+- Changed `compress` to list inputs ~90x faster on network file systems: members of zip files are not opened unless they are archives themselves, and sources are listed in parallel threads (e.g. ~3 minutes instead of ~4.5 hours for 31,515 zip files)
+- Changed `compress` to locate and parse PAE and contact probability matrices ~3x faster, which makes compressing large predictions ~35% faster with identical output
+- Added progress lines (every minute, with the time left) to `compress` and `decompress` if stderr is not a terminal, e.g. in Slurm logs, which only showed the label of the progress bar; `compress` also reports progress while listing inputs
 - Fixed `summary-confidences` failing on predictions with ligands, ions, nucleic acids, glycans or modified residues: structure-based scores are now computed per AlphaFold 3 token, and ipTM reported as null is kept as NaN
 
 ## [26.10] - 2026-10-19

@@ -119,20 +119,25 @@ def _walk_fileobj(stack, locator, name, fh, random_access):
         with tarfile.open(fileobj=fh, mode='r:' if random_access else 'r|') as tf:
             for member in tf:
                 if member.isfile():
-                    with contextlib.ExitStack() as member_stack:
-                        member_fh = member_stack.enter_context(tf.extractfile(member))
-                        yield from _walk_fileobj(member_stack, join(locator, member.name), member.name, member_fh, random_access)
+                    yield from _walk_member(join(locator, member.name), member.name, lambda: tf.extractfile(member), random_access)
     elif container == '.zip':
         if not random_access:
             fh = io.BytesIO(fh.read())
         with zipfile.ZipFile(fh) as zf:
             for info in zf.infolist():
                 if not info.is_dir():
-                    with contextlib.ExitStack() as member_stack:
-                        member_fh = member_stack.enter_context(zf.open(info))
-                        yield from _walk_fileobj(member_stack, join(locator, info.filename), info.filename, member_fh, _zip_member_random_access(info))
+                    yield from _walk_member(join(locator, info.filename), info.filename, lambda: zf.open(info), _zip_member_random_access(info))
     else:
         yield locator
+
+def _walk_member(locator, name, open_member, random_access):
+    # Members are only opened to descend into nested archives: opening a zip member reads its local header, i.e. one
+    # random read per member, which makes listing zip files on network file systems ~10x slower
+    if _container_type(strip_compression(name)) is None:
+        yield locator
+        return
+    with contextlib.ExitStack() as stack:
+        yield from _walk_fileobj(stack, locator, name, stack.enter_context(open_member()), random_access)
 
 @contextlib.contextmanager
 def open(locator, seekable=False):

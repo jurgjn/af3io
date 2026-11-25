@@ -85,6 +85,10 @@ def test_compress_inputs(tmp_path):
     assert [ path for path, _ in pipeline.iter_inputs(sources, extract_archives=False) ] == [
         'root/sub/a.json.gz', 'root/sub/pred.zip', 'root/sub/preds.tar', 'single.txt.gz',
     ]
+    # Listing sources in parallel keeps their order
+    many = [ *sorted((root / 'sub').iterdir()), tmp_path / 'single.txt.gz' ] * 5
+    for extract_archives in [True, False]:
+        assert pipeline.list_inputs(many, extract_archives, threads=4) == list(pipeline.iter_inputs(many, extract_archives))
 
     # Duplicates after unpacking, e.g. a.json and a.json.gz
     (root / 'sub' / 'a.json').write_bytes(b'a')
@@ -95,6 +99,8 @@ def test_compress_inputs(tmp_path):
     (tmp_path / 'unsafe.zip').write_bytes(zip_bytes({ '../evil.txt': b'evil' }))
     with pytest.raises(ValueError, match='unsafe'):
         list(pipeline.iter_inputs([tmp_path / 'unsafe.zip']))
+    with pytest.raises(ValueError, match='unsafe'):
+        pipeline.list_inputs([tmp_path / 'single.txt.gz', tmp_path / 'unsafe.zip'], threads=2)
 
 def test_compress_roundtrip(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
     expected = decompressed_contents(alphafold3_examples_dir)
@@ -133,6 +139,9 @@ def test_compress_cli(alphafold3_examples_dir, tmp_path):
     result = runner.invoke(af3io.cli.compress, ['--files-from', str(files_from), '-j', '2', str(image)])
     assert result.exit_code == 0, result.output
     expected = decompressed_contents(source)
+    # Progress as lines if stderr is not a terminal (e.g. in Slurm logs)
+    assert 'Listing: 1/1 sources (100.0%)' in result.output
+    assert f'Compressing: {len(expected):,}/{len(expected):,} files (100.0%)' in result.output
 
     result = runner.invoke(af3io.cli.compress, [str(source), str(image)])
     assert result.exit_code != 0 and 'already exists' in result.output
@@ -152,6 +161,7 @@ def test_compress_cli(alphafold3_examples_dir, tmp_path):
     result = runner.invoke(af3io.cli.decompress, ['--force', '-j', '1', str(image), 'barnase_barstar', str(tmp_path / 'out')])
     assert result.exit_code == 0, result.output
     assert read_dir(tmp_path / 'out') == expected
+    assert f'Decompressing: {len(expected):,}/{len(expected):,} files (100.0%)' in result.output
 
     result = runner.invoke(af3io.cli.decompress, [str(image), 'missing/*', str(tmp_path / 'out')])
     assert result.exit_code != 0 and 'not found' in result.output
@@ -217,6 +227,18 @@ def test_jsonspan():
     for invalid in ['{"a": [1, 2', '{"a" 1}', '[1,]', '{"a": 1} x', '', '{"a": 1,}']:
         with pytest.raises(ValueError):
             jsonspan.find(invalid, lambda path: jsonspan.DESCEND)
+
+    # Matrices of numbers are located without parsing them (numbers are not checked), anything else with the json scanner
+    values = { 'm': '[[0.8,2.8],[3.0,0.05]]', 'e': '[[]]', 'r': '[[1],[2,3],[]]', 'bad': '[[1,,2]]', 's': '[[1, 2]]', 'n': '[[1,[2]],[3]]',
+        'q': '[["]]"],[1]]', 'u': '[["€"]]', 'one': '[1,2]', 'x': '[[0.5]]' }
+    text = '{' + ', '.join(f'"{key}": {value}' for key, value in values.items()) + '}'
+    spans = jsonspan.find(text, lambda path: jsonspan.DESCEND if path == () else jsonspan.SPAN)
+    assert { path[0]: text[start:end] for path, start, end in spans } == values
+    assert [ jsonspan._skip_matrix(text, start) is not None for _, start, _ in spans ] == [ True, True, True, True, False, False, False, False, False, True ]
+    with pytest.raises(ValueError):
+        jsonspan.find(text, lambda path: jsonspan.DESCEND) # [[1,,2]] is checked if not selected
+    with pytest.raises(ValueError):
+        jsonspan.find('{"m": [[1]]]}', lambda path: jsonspan.DESCEND if path == () else jsonspan.SPAN)
 
 def test_compress_data(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
     expected = decompressed_contents(alphafold3_examples_dir)
@@ -348,6 +370,7 @@ def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_pa
         'pred/null_confidences.json': confidences_json([ row[:4] + [None] for row in pae ], cp, chain_ids),
         'pred/spaces_confidences.json': confidences_json(pae, cp, chain_ids).replace(b'[0.0,1.0', b'[0.0, 1.0'),
         'pred/invalid_confidences.json': confidences_json(pae, cp, chain_ids)[:-1],
+        'pred/number_confidences.json': confidences_json(pae, cp, chain_ids).replace(b'[0.0,1.0', b'[0.0,,1.0'), # not valid JSON
     }
     for name, data in files.items():
         (tmp_path / name).parent.mkdir(exist_ok=True)
@@ -358,11 +381,11 @@ def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_pa
         with af3io.compress.open(image) as reader:
             assert dict(reader.iter()) == files
             stubs = { name: reader.fs.read(f'/contents/confidences/{name}') for name in files if reader.fs.lookup(f'/contents/confidences/{name}') }
-            assert set(stubs) == set(files) - ({'pred/invalid_confidences.json'} if setting == 'lossless' else set())
+            assert set(stubs) == set(files) - ({'pred/invalid_confidences.json', 'pred/number_confidences.json'} if setting == 'lossless' else set())
             assert (b'af3io:///' in stubs['pred/ok_confidences.json']) == (setting == 'lossless')
             assert stubs['pred/null_confidences.json'] == files['pred/null_confidences.json']
             assert stubs['pred/spaces_confidences.json'] == files['pred/spaces_confidences.json']
-            assert reader.manifest['stats']['fallbacks'] == ({ 'confidences': 1 } if setting == 'lossless' else {})
+            assert reader.manifest['stats']['fallbacks'] == ({ 'confidences': 2 } if setting == 'lossless' else {})
 
 def test_compress_contact_probs(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
     from af3io.compress import matrix

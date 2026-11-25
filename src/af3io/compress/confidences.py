@@ -60,6 +60,7 @@ def split(data, settings):
             if matrix.format(values, DECIMALS[field]) != raw:
                 raise ValueError('formatting differs')
         except ValueError:
+            json.loads(raw) # matrices are not checked by jsonspan.find, raises ValueError if not valid JSON
             continue # keep as-is
         stored = raw
         if field == 'pae' and settings.pae == 'lossy':

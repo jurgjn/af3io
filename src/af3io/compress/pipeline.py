@@ -56,25 +56,46 @@ def iter_inputs(sources, extract_archives=True):
     dir/pred.zip containing pred/pred_model.cif.gz is added as dir/pred/pred_model.cif
     """
     for source in sources:
-        source = os.fspath(source)
-        base = os.path.dirname(os.path.abspath(source))
-        if extract_archives:
-            for locator in archive.walk(source):
-                disk_path, *members = archive.split(locator)
-                rel = os.path.relpath(os.path.abspath(disk_path), base).replace(os.sep, '/')
-                if len(members) == 0:
-                    path = archive.strip_compression(rel)
-                else:
-                    path = posixpath.join(posixpath.dirname(rel), *map(_member_dir, members[:-1]), archive.strip_compression(members[-1]))
-                yield _safe_path(path, locator), locator
-        elif os.path.isdir(source):
-            for root, dirs, files in os.walk(source):
-                dirs.sort()
-                for file in sorted(files):
-                    disk_path = os.path.join(root, file)
-                    yield _safe_path(os.path.relpath(os.path.abspath(disk_path), base).replace(os.sep, '/'), disk_path), disk_path
-        else:
-            yield _safe_path(os.path.basename(os.path.abspath(source)), source), source
+        yield from _iter_source(source, extract_archives)
+
+def _iter_source(source, extract_archives):
+    source = os.fspath(source)
+    base = os.path.dirname(os.path.abspath(source))
+    if extract_archives:
+        for locator in archive.walk(source):
+            disk_path, *members = archive.split(locator)
+            rel = os.path.relpath(os.path.abspath(disk_path), base).replace(os.sep, '/')
+            if len(members) == 0:
+                path = archive.strip_compression(rel)
+            else:
+                path = posixpath.join(posixpath.dirname(rel), *map(_member_dir, members[:-1]), archive.strip_compression(members[-1]))
+            yield _safe_path(path, locator), locator
+    elif os.path.isdir(source):
+        for root, dirs, files in os.walk(source):
+            dirs.sort()
+            for file in sorted(files):
+                disk_path = os.path.join(root, file)
+                yield _safe_path(os.path.relpath(os.path.abspath(disk_path), base).replace(os.sep, '/'), disk_path), disk_path
+    else:
+        yield _safe_path(os.path.basename(os.path.abspath(source)), source), source
+
+def list_inputs(sources, extract_archives=True, threads=32, progress=None):
+    """Like list(iter_inputs(sources, extract_archives)), with sources listed in parallel threads: listing is dominated
+    by the latency of reading archive headers, e.g. ~40 ms per zip file on network file systems. progress.update(1) is
+    called for every source listed.
+    """
+    sources = list(sources)
+    listed = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(threads, len(sources)))) as executor:
+        try:
+            for items in executor.map(lambda source: list(_iter_source(source, extract_archives)), sources):
+                listed += items
+                if progress is not None:
+                    progress.update(1)
+        except BaseException:
+            executor.shutdown(cancel_futures=True)
+            raise
+    return listed
 
 _SAMPLE_DIR = re.compile(r'seed-\d+_sample-\d+')
 
@@ -215,7 +236,7 @@ def _executor(jobs, initializer=None, initargs=()):
         yield executor
 
 class _NoProgress:
-    def __init__(self, total):
+    def __init__(self, total, label=None):
         pass
 
     def __enter__(self):
@@ -237,11 +258,14 @@ def _af3io_version():
         return 'unknown'
 
 def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress):
-    """Compress files under sources into a new container at dest, return the manifest. progress(total) returns a
-    context manager with an update(n) method to report progress, e.g. click.progressbar.
+    """Compress files under sources into a new container at dest, return the manifest. progress(total, label) returns a
+    context manager with an update(n) method to report progress (e.g. click.progressbar), first of listing sources
+    (label 'Listing'), then of compressing files (label 'Compressing').
     """
     jobs = jobs or default_jobs()
-    groups = group_inputs(iter_inputs(sources, settings.extract_archives))
+    sources = list(sources)
+    with progress(len(sources), 'Listing') as bar:
+        groups = group_inputs(list_inputs(sources, settings.extract_archives, progress=bar))
     stats = {
         'files': collections.Counter(),
         'fallbacks': collections.Counter(),
@@ -250,7 +274,7 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
         'blobs': 0,
     }
     with Writer(dest, level=settings.level, block_size=settings.block_size, processors=jobs) as writer, \
-            progress(sum(map(len, groups))) as bar, multiprocessing.get_context('spawn').Manager() as manager:
+            progress(sum(map(len, groups)), 'Compressing') as bar, multiprocessing.get_context('spawn').Manager() as manager:
         known = manager.dict() # blobs written, shared with workers so they skip encoding them again
         with _executor(jobs, initializer=_init_known, initargs=(known,)) as executor:
             for results in _imap(executor, functools.partial(_compress_group, settings=settings), groups, ahead=2 * jobs):
@@ -261,7 +285,6 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
                     if result.kind is None:
                         stats['dropped']['files'] += 1
                         stats['dropped']['bytes'] += result.size
-                        bar.update(1)
                         continue
                     stats['uncompressed'].update(result.uncompressed)
                     stats['files'][result.kind] += 1
@@ -271,12 +294,12 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
                         xattrs[container.XATTR_FALLBACK] = result.fallback
                     group_blobs += result.blobs
                     writer.add(f'contents/{result.kind}/{result.path}', result.stub, xattrs)
-                    bar.update(1)
                 for path, blob in group_blobs:
                     if path not in writer:
                         writer.add(path, blob)
                         known[path] = True
                         stats['blobs'] += 1
+                bar.update(len(results))
         manifest = {
             'format': container.FORMAT_VERSION,
             'af3io_version': _af3io_version(),
@@ -308,7 +331,8 @@ def _decompress_files(names, dest):
 def decompress(image, dest, patterns=(), jobs=None, force=False, progress=_NoProgress):
     """Decompress files matching patterns (default: all files) from the container at image into the directory
     dest, return their names. Every file is verified against its checksum. Raises FileExistsError if a file
-    exists already (unless force) and KeyError if a pattern matches no files.
+    exists already (unless force) and KeyError if a pattern matches no files. progress(total, label) reports progress
+    as in compress (label 'Decompressing').
     """
     jobs = jobs or default_jobs()
     image, dest = os.path.abspath(image), os.path.abspath(dest) # workers may run in a different directory
@@ -328,7 +352,7 @@ def decompress(image, dest, patterns=(), jobs=None, force=False, progress=_NoPro
                 raise FileExistsError(f'{path} already exists')
 
     batches = [ list(batch) for _, batch in itertools.groupby(names, key=_group_key) ]
-    with progress(len(names)) as bar:
+    with progress(len(names), 'Decompressing') as bar:
         if jobs == 1:
             global _reader
             with Container(image) as _reader:

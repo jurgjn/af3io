@@ -301,9 +301,53 @@ def summary_confidences(jobs, predictions, output_parquet):
         click.echo(f'Write:\t{output_parquet} ({len(summary_confidences)} rows)', err=True)
     click.echo(f'Finished in {humanfriendly.format_timespan(time.monotonic() - time_start)}', err=True)
 
-def _progressbar(label):
-    # Progress bar on stderr for af3io.compress.compress/decompress, called with the total number of files
-    return lambda total: click.progressbar(length=total, label=label, show_pos=True, file=sys.stderr)
+def _format_duration(seconds):
+    days, seconds = divmod(int(seconds), 86400)
+    hms = f'{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}'
+    return f'{days}d {hms}' if days > 0 else hms
+
+class _LogProgress:
+    """Progress as lines on stderr at the start, every interval seconds, and at the end, for output that is not a terminal
+    (e.g. Slurm logs), where click.progressbar only shows its label, e.g.:
+    2026-11-25 14:05:00 Compressing: 12,345/630,300 files (2.0%), 0:15:00 elapsed, 12:10:00 left
+    """
+    def __init__(self, total, label, unit, interval=60):
+        self.total, self.label, self.unit, self.interval = total, label, unit, interval
+        self.pos, self.shown = 0, None
+
+    def __enter__(self):
+        self.start = time.monotonic()
+        self._show()
+        return self
+
+    def update(self, n):
+        self.pos += n
+        if time.monotonic() - self.last >= self.interval:
+            self._show()
+
+    def __exit__(self, exc_type, *exc_info):
+        if exc_type is None and self.shown != self.pos:
+            self._show()
+
+    def _show(self):
+        self.last, self.shown = time.monotonic(), self.pos
+        elapsed = self.last - self.start
+        line = f'{time.strftime("%Y-%m-%d %H:%M:%S")} {self.label}: {self.pos:,}/{self.total:,} {self.unit}'
+        if self.total > 0:
+            line += f' ({100 * self.pos / self.total:.1f}%)'
+        line += f', {_format_duration(elapsed)} elapsed'
+        if 0 < self.pos < self.total:
+            line += f', {_format_duration(elapsed / self.pos * (self.total - self.pos))} left'
+        click.echo(line, err=True)
+
+_PROGRESS_UNITS = { 'Listing': 'sources', 'Compressing': 'files', 'Decompressing': 'files' }
+
+def _progress(total, label):
+    # Progress of af3io.compress.compress/decompress on stderr: a progress bar on a terminal, lines otherwise (see _LogProgress)
+    unit = _PROGRESS_UNITS.get(label, 'files')
+    if sys.stderr.isatty():
+        return click.progressbar(length=total, label=f'{label} {unit}', show_pos=True, file=sys.stderr)
+    return _LogProgress(total, label, unit)
 
 @cli.command(short_help='Compress AlphaFold 3 inputs/outputs into a single file')
 @click.option('--compress-data', 'data', flag_value='compress', default=True,
@@ -375,8 +419,10 @@ def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_a
     if dest.exists():
         raise click.UsageError(f'{dest} already exists')
     settings = af3io.compress.Settings(data=data, pae=pae, contact_probs=compress_contact_probs, model=compress_model, extract_archives=extract_archives)
+    jobs = jobs or af3io.compress.pipeline.default_jobs()
+    click.echo(f'Compressing {len(sources):,} sources into {dest} using {jobs} worker processes ({os.cpu_count()} CPUs on this machine)', err=True)
     try:
-        manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progressbar('Compressing'))
+        manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progress)
     except (ValueError, FileExistsError) as e:
         raise click.ClickException(str(e))
     stats = manifest['stats']
@@ -409,7 +455,7 @@ def decompress(force, jobs, image, patterns, dest):
     """
     import af3io.compress
     try:
-        names = af3io.compress.decompress(image, dest, patterns, jobs=jobs, force=force, progress=_progressbar('Decompressing'))
+        names = af3io.compress.decompress(image, dest, patterns, jobs=jobs, force=force, progress=_progress)
     except (KeyError, FileExistsError, af3io.compress.ChecksumError) as e:
         raise click.ClickException(str(e).strip('\'"'))
     click.echo(f'Write:\t{len(names)} files to {dest}', err=True)
