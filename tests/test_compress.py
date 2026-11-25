@@ -146,6 +146,12 @@ def test_compress_cli(alphafold3_examples_dir, tmp_path):
     result = runner.invoke(af3io.cli.compress, [str(source), str(image)])
     assert result.exit_code != 0 and 'already exists' in result.output
 
+    # Paths from --files-from are checked while listing
+    files_from.write_text(f'{source}\n{tmp_path / "missing.zip"}\n')
+    result = runner.invoke(af3io.cli.compress, ['--files-from', str(files_from), str(tmp_path / 'missing.af3io.sqfs')])
+    assert result.exit_code != 0 and f'{tmp_path / "missing.zip"} does not exist' in result.output, result.output
+    assert not (tmp_path / 'missing.af3io.sqfs').exists()
+
     result = runner.invoke(af3io.cli.info, [str(image)])
     assert result.exit_code == 0, result.output
     assert 'confidences' in result.output and 'total' in result.output

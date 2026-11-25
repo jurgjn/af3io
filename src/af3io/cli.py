@@ -407,13 +407,8 @@ def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_a
                 raise click.UsageError(f'--lossy conflicts with the option given for {name.removeprefix("compress_").replace("_", "-")}')
         data, pae, compress_contact_probs, compress_model = 'compress', 'lossy', True, True
     sources = list(sources)
-    if files_from is not None:
-        for line in files_from:
-            if line.strip() != '':
-                path = Path(line.rstrip('\n'))
-                if not path.exists():
-                    raise click.UsageError(f'{path} (from --files-from) does not exist')
-                sources.append(path)
+    if files_from is not None: # checked while listing, in parallel (one by one takes ~20 minutes for 30,000 files on NFS)
+        sources += [ Path(line.rstrip('\n')) for line in files_from if line.strip() != '' ]
     if len(sources) == 0:
         raise click.UsageError('No files to compress, specify SOURCES and/or --files-from')
     if dest.exists():
@@ -423,7 +418,7 @@ def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_a
     click.echo(f'Compressing {len(sources):,} sources into {dest} using {jobs} worker processes ({os.cpu_count()} CPUs on this machine)', err=True)
     try:
         manifest = af3io.compress.compress(sources, dest, settings, jobs=jobs, progress=_progress)
-    except (ValueError, FileExistsError) as e:
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
     stats = manifest['stats']
     size_in, size_out = sum(stats['uncompressed'].values()), dest.stat().st_size

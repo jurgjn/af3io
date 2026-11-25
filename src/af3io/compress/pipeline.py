@@ -60,6 +60,8 @@ def iter_inputs(sources, extract_archives=True):
 
 def _iter_source(source, extract_archives):
     source = os.fspath(source)
+    if not os.path.exists(source):
+        raise FileNotFoundError(f'{source} does not exist')
     base = os.path.dirname(os.path.abspath(source))
     if extract_archives:
         for locator in archive.walk(source):
