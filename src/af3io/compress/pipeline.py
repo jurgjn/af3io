@@ -229,6 +229,13 @@ class _NoProgress:
 
 KIND_ORDER = { kind: i for i, kind in enumerate(container.KINDS) }
 
+def _af3io_version():
+    # af3io has no package metadata when run from a source checkout without installing it (e.g. pytest, see pythonpath in pyproject.toml)
+    try:
+        return importlib.metadata.version('af3io')
+    except importlib.metadata.PackageNotFoundError:
+        return 'unknown'
+
 def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress):
     """Compress files under sources into a new container at dest, return the manifest. progress(total) returns a
     context manager with an update(n) method to report progress, e.g. click.progressbar.
@@ -272,7 +279,7 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
                         stats['blobs'] += 1
         manifest = {
             'format': container.FORMAT_VERSION,
-            'af3io_version': importlib.metadata.version('af3io'),
+            'af3io_version': _af3io_version(),
             'settings': settings.manifest(),
             'stats': { key: dict(value) if isinstance(value, collections.Counter) else value for key, value in stats.items() },
         }
