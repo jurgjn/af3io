@@ -1,5 +1,5 @@
 """
-    af3io containers (.af3io): squashfs images with the following layout
+    af3io containers (.af3io.sqfs): squashfs images with the following layout
 
         /af3io_manifest.json                    af3io version, compression settings and totals
         /contents/<kind>/<path>                 one file for every input file at <path>, kind is one of KINDS
@@ -91,7 +91,7 @@ class Writer:
             raise FileExistsError(f'{self.path} already exists')
         self.level, self.block_size = level, block_size
         self._tmpdir = tempfile.mkdtemp(prefix=f'.{os.path.basename(self.path)}.', dir=os.path.dirname(os.path.abspath(self.path)))
-        self._image = os.path.join(self._tmpdir, 'image.af3io')
+        self._image = os.path.join(self._tmpdir, 'image.af3io.sqfs')
         self._log = open(os.path.join(self._tmpdir, 'sqfstar.log'), 'w+b')
         cmd = ['sqfstar', '-comp', 'zstd', '-Xcompression-level', str(level), '-b', str(block_size),
             '-reproducible', '-mkfs-time', '0', '-all-time', '0', '-all-root', '-default-mode', '0755',

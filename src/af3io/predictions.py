@@ -18,7 +18,7 @@ class Predictions:
         Handles the change in "file name layout" (introduced in ~b78e215) where every output file now starts with the AlphaFold 3 job name..
         The zip archive can be nested in other archives and/or compressed, e.g. pools_5k.tar::pools_5k_0040f80.zip (see af3io.archive)
         Individual output files can be compressed (.gz, .zst), e.g. pools_5k_0040f80/pools_5k_0040f80_confidences.json.gz
-        The output directory can also be inside an af3io container, e.g. pools_5k.af3io::pools_5k/pools_5k_0040f80 (see af3io.compress)
+        The output directory can also be inside an af3io container, e.g. pools_5k.af3io.sqfs::pools_5k/pools_5k_0040f80 (see af3io.compress)
         File paths (model_path, confidences_path, ...) always refer to uncompressed names relative to the parent of the output directory
     """
     def __init__(self, path):
@@ -142,7 +142,7 @@ def _is_ranking_scores(path):
     return path.name in ('ranking_scores.csv', f'{path.parent.name}_ranking_scores.csv')
 
 def _is_container_locator(path):
-    # <image>.af3io::<path to output directory>
+    # <image>.af3io.sqfs::<path to output directory>
     parts = archive.split(path)
     return len(parts) == 2 and compress.is_container(parts[0])
 
@@ -157,7 +157,7 @@ def find_predictions(path):
     (nested) archive of predictions, e.g. a tar file of zip files (see af3io.archive). A prediction is either
     a zip file with a top-level <name>/<name>_ranking_scores.csv, or a directory <name> on disk with a
     <name>_ranking_scores.csv (individual files can be compressed, e.g. <name>_ranking_scores.csv.gz). Predictions in
-    af3io containers (.af3io, see af3io.compress) are listed as <image>.af3io::<path to output directory>.
+    af3io containers (.af3io.sqfs, see af3io.compress) are listed as <image>.af3io.sqfs::<path to output directory>.
     """
     seen = set()
     for locator in archive.walk(path):
@@ -360,7 +360,7 @@ def stream_predictions(path, subpath='', top_model_only=True, chain_pairs=False)
     """Yield Prediction(name, model, pae, contact_probs, chain1, chain2) for the predictions under path (a
     directory, (nested) archive, or af3io container, see find_predictions), e.g.:
 
-        for (name, model, pae, contact_probs, chain1, chain2) in stream_predictions('pools.af3io'):
+        for (name, model, pae, contact_probs, chain1, chain2) in stream_predictions('pools.af3io.sqfs'):
             ...
 
     subpath restricts predictions to those under it (relative to path, or to the root of an af3io container).

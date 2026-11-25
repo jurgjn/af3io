@@ -3,7 +3,7 @@ This project adheres to **YY.M.MICRO**-style [Calendar Versioning](https://calve
 
 ## [Unreleased]
 - Removed the experimental `confidences-compress`/`confidences-decompress` (replaced by `compress`), and the `zarr` dependency
-- Added `compress`, `decompress` and `info` to store predictions (directories, archives) in a single squashfs image (`.af3io`) with bit-identical decompression verified by sha256, see `af3io.compress` and design/adr/0001-compress-squashfs-container.md
+- Added `compress`, `decompress` and `info` to store predictions (directories, archives) in a single squashfs image (`.af3io.sqfs`) with bit-identical decompression verified by sha256, see `af3io.compress` and design/adr/0001-compress-squashfs-container.md
 - Added compression of data pipeline JSONs to `compress` by storing MSAs and templates of each sequence once (`--compress-data`, default), or leaving them out (`--drop-data`), see design/adr/0002-compress-data-pipeline.md
 - Added compression of PAE matrices to `compress` as lossless JPEG XL images, one per pair of chains (`--compress-pae`, default), see design/adr/0003-compress-pae.md
 - Added compression of contact probabilities to `compress` as lossless JPEG XL images of the upper triangle, stored once per seed (`--compress-contact-probs`, default), see design/adr/0004-compress-contact-probs.md

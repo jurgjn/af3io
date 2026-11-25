@@ -15,7 +15,7 @@ def alphafold3_examples_dir():
 
 @pytest.fixture(scope='session')
 def alphafold3_examples_af3io(alphafold3_examples_dir, tmp_path_factory):
-    path = tmp_path_factory.mktemp('af3io_compress') / 'alphafold3_examples.af3io'
+    path = tmp_path_factory.mktemp('af3io_compress') / 'alphafold3_examples.af3io.sqfs'
     af3io.compress.compress([alphafold3_examples_dir], path, jobs=4)
     return path
 
@@ -30,7 +30,7 @@ def test_squashfs(tmp_path):
         'a/random.bin': np.random.default_rng(1).integers(0, 255, size=5000, dtype=np.uint8).tobytes(),
         'z.txt': b'z' * 100_000,
     }
-    image = tmp_path / 'test.af3io'
+    image = tmp_path / 'test.af3io.sqfs'
     with container.Writer(image, level=3, block_size=1 << 17) as writer:
         for name, data in files.items():
             writer.add(name, data, {'user.test.sha256': hashlib.sha256(data).hexdigest()})
@@ -120,14 +120,14 @@ def test_compress_roundtrip(alphafold3_examples_dir, alphafold3_examples_af3io, 
         assert df.loc['data', 'uncompressed'] == sum(len(data) for name, data in expected.items() if name.endswith('_data.json'))
 
 def test_compress_reproducible(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
-    path = tmp_path / 'again.af3io'
+    path = tmp_path / 'again.af3io.sqfs'
     af3io.compress.compress([alphafold3_examples_dir], path, jobs=3)
     assert path.read_bytes() == alphafold3_examples_af3io.read_bytes()
 
 def test_compress_cli(alphafold3_examples_dir, tmp_path):
     runner = click.testing.CliRunner()
     source = alphafold3_examples_dir / 'barnase_barstar'
-    image = tmp_path / 'barnase_barstar.af3io'
+    image = tmp_path / 'barnase_barstar.af3io.sqfs'
     files_from = tmp_path / 'files.txt'
     files_from.write_text(f'{source}\n')
     result = runner.invoke(af3io.cli.compress, ['--files-from', str(files_from), '-j', '2', str(image)])
@@ -158,14 +158,14 @@ def test_compress_cli(alphafold3_examples_dir, tmp_path):
 
 def test_compress_no_extract_archives(alphafold3_examples_dir, tmp_path):
     source = alphafold3_examples_dir / 'barnase_barstar'
-    image = tmp_path / 'barnase_barstar.af3io'
+    image = tmp_path / 'barnase_barstar.af3io.sqfs'
     af3io.compress.compress([source], image, af3io.compress.Settings(extract_archives=False), jobs=2)
     af3io.compress.decompress(image, tmp_path / 'out', jobs=2)
     assert read_dir(tmp_path / 'out' / 'barnase_barstar') == read_dir(source)
 
 def test_compress_checksum(tmp_path):
     # Files that do not match their checksum are not returned
-    image = tmp_path / 'corrupt.af3io'
+    image = tmp_path / 'corrupt.af3io.sqfs'
     manifest = { 'format': container.FORMAT_VERSION, 'af3io_version': '0', 'settings': {}, 'stats': { 'uncompressed': {} } }
     with container.Writer(image, level=3) as writer:
         writer.add(container.MANIFEST, json.dumps(manifest).encode())
@@ -236,7 +236,7 @@ def test_compress_data(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_p
     source = alphafold3_examples_dir / 'barnase_barstar'
     expected = decompressed_contents(source)
     for setting in ['store', 'drop']:
-        image = tmp_path / f'{setting}.af3io'
+        image = tmp_path / f'{setting}.af3io.sqfs'
         af3io.compress.compress([source], image, af3io.compress.Settings(data=setting), jobs=2)
         with af3io.compress.open(image) as reader:
             assert list(reader.fs.walk('/blobs/data')) == []
@@ -263,7 +263,7 @@ def test_compress_fallback(tmp_path):
         (tmp_path / name).parent.mkdir(exist_ok=True)
         (tmp_path / name).write_bytes(data)
     for setting, fallbacks in [('compress', 2), ('store', 0)]:
-        image = tmp_path / f'{setting}.af3io'
+        image = tmp_path / f'{setting}.af3io.sqfs'
         af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(data=setting), jobs=1)
         with af3io.compress.open(image) as reader:
             assert dict(reader.iter()) == files
@@ -353,7 +353,7 @@ def test_compress_pae(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_pa
         (tmp_path / name).parent.mkdir(exist_ok=True)
         (tmp_path / name).write_bytes(data)
     for setting in ['lossless', 'none']:
-        image = tmp_path / f'{setting}.af3io'
+        image = tmp_path / f'{setting}.af3io.sqfs'
         af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(pae=setting, contact_probs=False), jobs=1)
         with af3io.compress.open(image) as reader:
             assert dict(reader.iter()) == files
@@ -388,7 +388,7 @@ def test_compress_contact_probs(alphafold3_examples_dir, alphafold3_examples_af3
     (tmp_path / 'pred').mkdir()
     (tmp_path / 'pred' / 'x_confidences.json').write_bytes(confidences_json(pae, cp, chain_ids))
     for flag in ['--compress-contact-probs', '--no-compress-contact-probs']:
-        image = tmp_path / f'{flag}.af3io'
+        image = tmp_path / f'{flag}.af3io.sqfs'
         result = click.testing.CliRunner().invoke(af3io.cli.compress, [flag, '-j', '1', str(tmp_path / 'pred'), str(image)])
         assert result.exit_code == 0, result.output
         with af3io.compress.open(image) as reader:
@@ -454,7 +454,7 @@ def test_compress_model(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_
     for name, data in files.items():
         (tmp_path / name).write_bytes(data)
     for setting in [True, False]:
-        image = tmp_path / f'{setting}.af3io'
+        image = tmp_path / f'{setting}.af3io.sqfs'
         af3io.compress.compress([tmp_path / 'pred'], image, af3io.compress.Settings(model=setting), jobs=1)
         with af3io.compress.open(image) as reader:
             assert dict(reader.iter()) == files
@@ -466,7 +466,7 @@ def test_compress_pae_lossy(alphafold3_examples_dir, tmp_path):
     source = alphafold3_examples_dir / 'barnase_barstar'
     expected = decompressed_contents(source)
     runner = click.testing.CliRunner()
-    image = tmp_path / 'lossy.af3io'
+    image = tmp_path / 'lossy.af3io.sqfs'
     result = runner.invoke(af3io.cli.compress, ['--lossy', '-j', '2', str(source), str(image)])
     assert result.exit_code == 0, result.output
     result = runner.invoke(af3io.cli.decompress, [str(image), str(tmp_path / 'out')]) # verifies checksums of lossy contents
@@ -494,7 +494,7 @@ def test_compress_pae_lossy(alphafold3_examples_dir, tmp_path):
     assert n_changed > 0
 
     # --lossy conflicts with other settings
-    result = runner.invoke(af3io.cli.compress, ['--lossy', '--no-compress-model', str(source), str(tmp_path / 'conflict.af3io')])
+    result = runner.invoke(af3io.cli.compress, ['--lossy', '--no-compress-model', str(source), str(tmp_path / 'conflict.af3io.sqfs')])
     assert result.exit_code != 0 and 'conflicts' in result.output
-    result = runner.invoke(af3io.cli.compress, ['--lossy', '--compress-model', '-j', '1', str(source), str(tmp_path / 'same.af3io')])
+    result = runner.invoke(af3io.cli.compress, ['--lossy', '--compress-model', '-j', '1', str(source), str(tmp_path / 'same.af3io.sqfs')])
     assert result.exit_code == 0, result.output

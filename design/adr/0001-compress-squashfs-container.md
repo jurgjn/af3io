@@ -6,7 +6,7 @@
 
 ## Context
 
-`af3io compress` stores AlphaFold 3 inputs/outputs in a single file that is a squashfs image (`.af3io`) compressed with zstd, with
+`af3io compress` stores AlphaFold 3 inputs/outputs in a single file that is a squashfs image (`.af3io.sqfs`) compressed with zstd, with
 file deduplication, per-file metadata in extended attributes (xattrs), and random access from Python without decompressing to disk.
 This ADR covers the container itself (layout, writing, reading, settings, command-line interface); bespoke compression of data
 pipeline JSONs, confidences JSONs, and model CIFs builds on it (later ADRs).
@@ -120,7 +120,7 @@ The reader also exposes the on-disk block sizes of every file, which `info` need
 
 - `af3io.compress.open(path)` returns a `Container` with `namelist(subpath)`, `read(name)`, `open(name)`, `iter(subpath)`,
   `info()`; files are re-generated in memory, never on disk.
-- Predictions in a container are addressed as `<image>.af3io::<path of the output directory>`, so `af3io.predictions.Predictions`,
+- Predictions in a container are addressed as `<image>.af3io.sqfs::<path of the output directory>`, so `af3io.predictions.Predictions`,
   `find_predictions` and `af3io summary-confidences` work on containers as on directories and zip files.
 - `af3io.predictions.stream_predictions(path, subpath, top_model_only, chain_pairs)` yields
   `(name, model, pae, contact_probs, chain1, chain2)` for any source (directories, archives, containers). The spec suggests

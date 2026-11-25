@@ -52,7 +52,7 @@ def test_compress_pae_lossy_accuracy(record, tmp_path):
         source = fetch_test_dir(prefix)
         scores = {}
         for pae in ('lossless', 'lossy'):
-            image = tmp_path / f'{dataset}_{pae}.af3io'
+            image = tmp_path / f'{dataset}_{pae}.af3io.sqfs'
             af3io.compress.compress([source], image, af3io.compress.Settings(data='drop', pae=pae))
             scores[pae] = chain_pair_scores(summary_confidences(image, tmp_path / f'{dataset}_{pae}.parquet'))
         merged = scores['lossless'].merge(scores['lossy'], on=['name', 'seed', 'sample', 'score', 'chain1', 'chain2'], suffixes=('_lossless', '_lossy'), validate='1:1')

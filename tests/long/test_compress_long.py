@@ -39,7 +39,7 @@ def sha256_dir(root):
 @pytest.mark.parametrize('dataset', DATASETS)
 def test_compress_roundtrip_long(dataset, tmp_path):
     source = fetch_test_dir(DATASETS[dataset])
-    image = tmp_path / f'{dataset}.af3io'
+    image = tmp_path / f'{dataset}.af3io.sqfs'
     af3io.compress.compress([source], image)
     af3io.compress.decompress(image, tmp_path / 'out')
     assert sha256_dir(tmp_path / 'out') == { name: hashlib.sha256(data).hexdigest() for name, data in decompressed_contents(source).items() }
@@ -126,7 +126,7 @@ def test_compress_efficiency(record, tmp_path):
         settings = {}
         for i, (stage, stage_settings) in enumerate(STAGES):
             settings.update(stage_settings)
-            image = tmp_path / f'{dataset}_{i}.af3io'
+            image = tmp_path / f'{dataset}_{i}.af3io.sqfs'
             af3io.compress.compress([source], image, af3io.compress.Settings(**settings))
             out = tmp_path / f'{dataset}_{i}'
             af3io.compress.decompress(image, out) # verifies checksums (of lossy contents with lossy compression)

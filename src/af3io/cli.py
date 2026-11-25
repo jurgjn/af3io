@@ -330,10 +330,10 @@ def _progressbar(label):
 @click.argument('dest', type=click.Path(dir_okay=False, path_type=Path))
 def compress(data, pae, compress_contact_probs, compress_model, lossy, extract_archives, files_from, jobs, sources, dest):
     """Compress files and directories in SOURCES into a single file DEST
-    (.af3io, a squashfs image), e.g.:
+    (.af3io.sqfs, a squashfs image), e.g.:
 
     \b
-        af3io compress af3io-testdata/mgen_pools_5k_top3 mgen_pools_5k_top3.af3io
+        af3io compress af3io-testdata/mgen_pools_5k_top3 mgen_pools_5k_top3.af3io.sqfs
 
     Each of SOURCES is added under its base name (like cp -r), so the example
     above stores files as mgen_pools_5k_top3/pools_5k_0040f80/... in DEST. By
@@ -396,14 +396,14 @@ def decompress(force, jobs, image, patterns, dest):
     """Decompress files from IMAGE (an af3io container) into the directory DEST, e.g.:
 
     \b
-        af3io decompress mgen_pools_5k_top3.af3io .
+        af3io decompress mgen_pools_5k_top3.af3io.sqfs .
 
     Optional PATTERNS select files to decompress by name (shell-style
     wildcards, see fnmatch, where * also matches /), a pattern matching a
     directory selects all files under it, e.g.:
 
     \b
-        af3io decompress mgen_pools_5k_top3.af3io 'mgen_pools_5k_top3/pools_5k_0040f80/*' ./new_path
+        af3io decompress mgen_pools_5k_top3.af3io.sqfs 'mgen_pools_5k_top3/pools_5k_0040f80/*' ./new_path
 
     Every file is verified against the checksum of its original contents.
     """

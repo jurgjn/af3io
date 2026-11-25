@@ -12,7 +12,7 @@ Another advantage of this approach is robustness to potential future [changes in
 ## Implementation
 Implement under a separate sub-package `af3io.compress`.
 
-All files are kept in a squashfs container (.af3io extension), compressed with `zstd` and optimised compression settings. The container is organised as follows. For every input file at `<path>` there's a matching file under `/contents`, with different prefixes depending on the type:
+All files are kept in a squashfs container (.af3io.sqfs extension), compressed with `zstd` and optimised compression settings. The container is organised as follows. For every input file at `<path>` there's a matching file under `/contents`, with different prefixes depending on the type:
 - `/contents/confidences/<path>`
 - `/contents/data/<path>`
 - `/contents/model/<path>`
@@ -57,10 +57,10 @@ There's a manifest file at `/af3io_manifest.json` that contains the af3io versio
 ## Input-output options
 - Basic syntax similar to `cp`; destination is the last positional argument always:
 ```
-af3io compress af3io-testdata/mgen_pools_5k_top3 mgen_pools_5k_top3.af3io
-af3io decompress mgen_pools_5k_top3.af3io . # decompresses to current directory
-af3io decompress mgen_pools_5k_top3.af3io ./new_path # decompresses to ./new_path
-af3io decompress mgen_pools_5k_top3.af3io 'pools_5k_0040f80/*' ./new_path # decompresses files matching pools_5k_0040f80/* to ./new_path
+af3io compress af3io-testdata/mgen_pools_5k_top3 mgen_pools_5k_top3.af3io.sqfs
+af3io decompress mgen_pools_5k_top3.af3io.sqfs . # decompresses to current directory
+af3io decompress mgen_pools_5k_top3.af3io.sqfs ./new_path # decompresses to ./new_path
+af3io decompress mgen_pools_5k_top3.af3io.sqfs 'pools_5k_0040f80/*' ./new_path # decompresses files matching pools_5k_0040f80/* to ./new_path
 ```
 - ambiguous/undefined cases: try to mimic cp (e.g. multiple paths allowed under compress, last path is always the destination); use simpler option if matching cp adds excessive complexity (e.g. use python's fnmatch)
 - error if destination image already exists
