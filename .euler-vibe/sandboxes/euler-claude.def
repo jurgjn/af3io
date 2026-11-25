@@ -1,0 +1,144 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        bc \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        git-lfs \
+        make \
+        patch \
+        procps \
+        python3 \
+        ripgrep \
+        squashfuse \
+        squashfs-tools \
+        time \
+        unzip \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Git LFS filters/hooks for every user (writes /etc/gitconfig), so
+    # `git lfs ...` and LFS-tracked tests/data work without ~/.local/bin on PATH
+    git lfs install --system
+
+    # Install pixi system-wide into /usr/local/bin (the default ~/.pixi/bin
+    # would end up in /root, which isn't on PATH or readable at runtime)
+    curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local PIXI_NO_PATH_UPDATE=1 bash
+    pixi --version
+
+    # Install uv (+ uvx) and Node.js (+ npm, npx) from conda-forge as pixi
+    # global tools in their own prefix under /opt/pixi (Claude Code needs Node 22+).
+    # The build-time cache is deleted to keep the image small.
+    PIXI_HOME=/opt/pixi PIXI_CACHE_DIR=/tmp/pixi-cache \
+        pixi global install uv "nodejs>=22"
+    rm -rf /tmp/pixi-cache
+    export PATH=/opt/pixi/bin:$PATH
+    export UV_NO_CACHE=1
+    export UV_LINK_MODE=copy
+    uv --version
+    node --version
+    npm --version
+
+    # Install a uv-managed Python 3.13 into /opt/python (system-wide, not /root)
+    export UV_PYTHON_INSTALL_DIR=/opt/python
+    uv python install 3.13 --no-bin
+    chmod -R a+rX /opt/python
+
+    # Default venv on Python 3.13
+    uv venv /opt/venv --python 3.13 --managed-python --seed
+    uv pip install --python /opt/venv/bin/python \
+        torch \
+        torchvision \
+        torchaudio \
+        --index-url https://download.pytorch.org/whl/cu126
+
+    uv pip install --python /opt/venv/bin/python \
+        biopython \
+        matplotlib \
+        pandas \
+        scikit-learn \
+        seaborn \
+        polars \
+        pyarrow \
+        scipy
+
+    # af3io runtime + test dependencies not installed above (keep in sync with
+    # pyproject.toml); af3io itself is used from the mounted working copy
+    uv pip install --python /opt/venv/bin/python \
+        click \
+        humanfriendly \
+        imagecodecs \
+        backports.zstd \
+        pytest \
+        pytest-cov \
+        pooch
+
+    /opt/venv/bin/python -c "import sys, torch; print(sys.version, torch.__version__)"
+
+    # Install Claude Code globally via npm. --prefix /usr/local puts the
+    # `claude` command in /usr/local/bin instead of inside the pixi env,
+    # where pixi wouldn't expose it on PATH
+    npm_config_cache=/tmp/npm-cache \
+        npm install -g --prefix /usr/local @anthropic-ai/claude-code --allow-scripts=@anthropic-ai/claude-code
+    rm -rf /tmp/npm-cache
+    DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude --version
+
+    # Rust toolchain via rustup, system-wide under /opt/rust (not /root)
+    export RUSTUP_HOME=/opt/rust/rustup
+    export CARGO_HOME=/opt/rust/cargo
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+        --no-modify-path \
+        --profile minimal \
+        --default-toolchain stable \
+        --component rustfmt,clippy
+    chmod -R a+rX /opt/rust
+    export PATH=/opt/rust/cargo/bin:$PATH
+    rustc --version
+    cargo --version
+
+%environment
+    # Make /opt/venv the default Python environment
+    export VIRTUAL_ENV=/opt/venv
+
+    # Let uv find the baked-in Python 3.13, and never try to download
+    # another one into the read-only image or $HOME
+    export UV_PYTHON_INSTALL_DIR=/opt/python
+    export UV_PYTHON_DOWNLOADS=never
+
+    # CUDA runtime paths (host driver libs are injected by --nv at runtime),
+    # the default Python venv, and tools installed with `pixi global` at build time
+    export PATH=/usr/local/cuda/bin:/opt/venv/bin:/opt/pixi/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
+
+    # Claude:
+    # - The .sif is read-only, so disable the background auto-updater
+    # - Block all update paths including manual ones
+    # - Disables auto-updates, telemetry, error reporting, the /feedback command, release notes, gateway model discovery refreshes, and availability checks, plus feature-flag fetching and the session survey
+    export DISABLE_AUTOUPDATER=1
+    export DISABLE_UPDATES=1
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+    # pointing the cache(s) at scratch when you run the container
+    export PIXI_CACHE_DIR=${TMPDIR:-/tmp}/pixi-cache
+    export UV_CACHE_DIR=${TMPDIR:-/tmp}/uv-cache
+    export UV_LINK_MODE=copy
+
+    # Rust: toolchains live read-only in the image; cargo's registry,
+    # git checkouts and `cargo install` output go to writable scratch
+    export RUSTUP_HOME=/opt/rust/rustup
+    export CARGO_HOME=${TMPDIR:-/tmp}/cargo
+
+    # Also add /opt/rust/cargo/bin to your existing PATH line
+    export PATH=/usr/local/cuda/bin:/opt/venv/bin:/opt/pixi/bin:/opt/rust/cargo/bin:$PATH
+
+%runscript
+    exec claude "$@"
+
+%labels
+    Description Claude Code CLI (+python packages) in a container for HPC use
+    BuildCommand apptainer build --force euler-claude.sif euler-claude.def
