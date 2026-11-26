@@ -10,7 +10,7 @@ import scipy.special  # not reliably populated on `sp` by `import scipy` alone
 import Bio, Bio.PDB
 
 from . import archive, compress, residue_names
-from .scores import chain_pair_reduce, chain_pair_ptm_from_pae, model_confidence, ptm_symm, min_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, actifpsae, reactifptm, lis, lia, clis, clia, ilis, ilia, n_contacts, n_interface_residues, pdockq, pdockq2, iplddt, pinc
+from .scores import chain_pair_reduce, chain_pair_ptm_from_pae, clash, model_confidence, ptm_symm, min_symm, mean_symm, sum_symm, iptm_from_pae, actifptm_from_pae, ipsae, ipsae_nz, actifpsae, reactifptm, lis, lia, clis, clia, ilis, ilia, n_contacts, n_interface_residues, pdockq, pdockq2, iplddt, pinc
 
 class Predictions:
     """
@@ -251,9 +251,11 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
 
     # contact matrix, pLDDT (B-factor), and centre-of-mass distances based on model coordinates
     struct = read_struct(pred, model_path)
+    chains = list(struct.get_chains())
+
     assert len(get_model_tokens(struct)) == len(chain_ids), f'{model_path}: number of tokens differs from {confidences_path}'
     isin_8A = get_dist(struct) <= 8
-    dist_com = get_com_dist(struct)
+    #dist_com = get_com_dist(struct)
     plddt = get_model_bfactors(struct)
     plddt_row = np.broadcast_to(plddt[:, None], pae.shape)
     plddt_col = np.broadcast_to(plddt[None, :], pae.shape)
@@ -268,42 +270,28 @@ def _get_metrics(pred, confidences_path, model_path, chain_pair_iptm):
     chain_pair_iptm = np.asarray(chain_pair_iptm, dtype=float)
     chain_pair_iptm_corrected = chain_pair_iptm - chain_pair_iptm_expected
     chain_pair_ptm = chain_pair_ptm_from_pae(chain_ids, pae)
-    chain_pair_ipsae10 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae)
-    chain_pair_ipsae15 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae)
+    #chain_pair_ipsae10 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae)
+    #chain_pair_ipsae15 = chain_pair_reduce(functools.partial(ipsae, pae_cutoff=15), chain_ids, pae)
     # LIS family: symmetrise without rounding as iLIS/iLIA are derived from these (as in https://github.com/flyark/AFM-LIS)
-    chain_pair_lis = mean_symm(chain_pair_reduce(lis, chain_ids, pae), decimals=None)
-    chain_pair_clis = mean_symm(chain_pair_reduce(clis, chain_ids, isin_8A, pae), decimals=None)
-    chain_pair_lia = sum_symm(chain_pair_reduce(lia, chain_ids, pae), decimals=None)
-    chain_pair_clia = sum_symm(chain_pair_reduce(clia, chain_ids, isin_8A, pae), decimals=None)
+    #chain_pair_lis = mean_symm(chain_pair_reduce(lis, chain_ids, pae), decimals=None)
+    #chain_pair_clis = mean_symm(chain_pair_reduce(clis, chain_ids, isin_8A, pae), decimals=None)
+    #chain_pair_lia = sum_symm(chain_pair_reduce(lia, chain_ids, pae), decimals=None)
+    #chain_pair_clia = sum_symm(chain_pair_reduce(clia, chain_ids, isin_8A, pae), decimals=None)
 
+    N_DIGITS = 4
     scores = collections.OrderedDict([
-        ('chain_pair_iptm_corrected',     np.round(chain_pair_iptm_corrected, 3)),
-        ('chain_pair_model_confidence',   np.round(model_confidence(chain_pair_iptm, chain_pair_ptm), 6)),
-        ('chain_pair_model_confidence_corrected', np.round(model_confidence(chain_pair_iptm_corrected, chain_pair_ptm), 6)),
-        ('chain_pair_iptm_from_pae',      ptm_symm(chain_pair_reduce(iptm_from_pae, chain_ids, pae))),
-        ('chain_pair_actifptm_from_pae',  ptm_symm(chain_pair_reduce(actifptm_from_pae, chain_ids, contact_probs, pae))),
-        ('chain_pair_ipsae10',            ptm_symm(chain_pair_ipsae10)),
-        ('chain_pair_ipsae15',            ptm_symm(chain_pair_ipsae15)),
-        ('chain_pair_ipsae10_min',        min_symm(chain_pair_ipsae10)),
-        ('chain_pair_ipsae15_min',        min_symm(chain_pair_ipsae15)),
-        ('chain_pair_actifpsae',          ptm_symm(chain_pair_reduce(actifpsae, chain_ids, contact_probs, pae))),
-        ('chain_pair_reactifptm',         ptm_symm(chain_pair_reduce(reactifptm, chain_ids, isin_8A, pae))),
-        ('chain_pair_lis',                np.round(chain_pair_lis, 6)),
-        ('chain_pair_lia',                chain_pair_lia),
-        ('chain_pair_clis',               np.round(chain_pair_clis, 6)),
-        ('chain_pair_clia',               chain_pair_clia),
-        ('chain_pair_ilis',               ilis(chain_pair_lis, chain_pair_clis)),
-        ('chain_pair_ilia',               ilia(chain_pair_lia, chain_pair_clia)),
-        ('chain_pair_pdockq',             ptm_symm(chain_pair_reduce(pdockq, chain_ids, isin_8A, plddt_row, plddt_col))),
-        ('chain_pair_pdockq2',            ptm_symm(chain_pair_reduce(pdockq2, chain_ids, isin_8A, pae, plddt_row, plddt_col))),
-        ('chain_pair_iplddt',             ptm_symm(chain_pair_reduce(iplddt, chain_ids, isin_8A, plddt_row, plddt_col))),
-        ('chain_pair_pinc',               mean_symm(chain_pair_reduce(pinc, chain_ids, pae, dist_com))),
-        ('chain_pair_contact_probs_max',  np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
-        ('chain_pair_contact_probs_pow3', np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 3), chain_ids, contact_probs, isin_8A), 6)),
-        ('chain_pair_contact_probs_pow6', np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 6), chain_ids, contact_probs, isin_8A), 6)),
-        ('chain_pair_contact_probs_pow9', np.round(chain_pair_reduce(lambda contacts_block, distance_mask: np.sum(contacts_block[distance_mask] ** 9), chain_ids, contact_probs, isin_8A), 6)),
-        ('chain_pair_n_contacts',         chain_pair_reduce(n_contacts, chain_ids, isin_8A)),
-        ('chain_pair_n_interface_residues', chain_pair_reduce(n_interface_residues, chain_ids, isin_8A)),
+        # contact_probs-based
+        ('chain_pair_contact_probs_count',  chain_pair_reduce(np.sum, chain_ids, (contact_probs >= .5) * isin_8A)),
+        ('chain_pair_contact_probs_max',    np.round(chain_pair_reduce(np.max, chain_ids, contact_probs), 2)),
+        # pLDDT-based
+        ('chain_pair_iplddt',               np.round(ptm_symm(chain_pair_reduce(iplddt, chain_ids, isin_8A, plddt_row, plddt_col)), N_DIGITS)),
+        ('chain_pair_pdockq',               np.round(ptm_symm(chain_pair_reduce(pdockq, chain_ids, isin_8A, plddt_row, plddt_col)), N_DIGITS)),
+        # PAE-based
+        ('chain_pair_ipsae',                np.round(ptm_symm(chain_pair_reduce(functools.partial(ipsae, pae_cutoff=10), chain_ids, pae)), N_DIGITS)),
+        ('chain_pair_ipsae_nz',             np.round(ptm_symm(chain_pair_reduce(functools.partial(ipsae_nz, pae_cutoff=10), chain_ids, pae)), N_DIGITS)),
+        # other
+        ('chain_pair_iptm_corrected',       np.round(chain_pair_iptm_corrected, N_DIGITS)),
+        ('chain_pair_has_clash',            np.array([ [clash(chain1, chain2) for chain2 in chains ] for chain1 in chains ])),
     ])
     return scores
 

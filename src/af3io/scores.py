@@ -14,7 +14,9 @@ References:
 """
 
 import itertools
-import numpy as np
+import numpy as np, scipy as sp
+
+from pprint import pprint
 
 def chain_pair_reduce(func, token_chain_ids, *arrs):
     # Apply a user-defined function to non-overlapping submatrices of large square matrices (n by n dimension)
@@ -107,6 +109,19 @@ def ipsae(pae_block, pae_cutoff):
     weights_block = (pae_block < pae_cutoff).astype(float)
     num_tokens = weights_block.sum(axis=1, keepdims=True)
     return _weighted_ptm_from_pae(weights_block, pae_block, num_tokens, d0_lower_bound=1)
+
+def ipsae_nz(pae_block, pae_cutoff):
+    """
+        ipSAE without zeros: i
+        Identical to ipsae() whenever any residue pair has PAE < pae_cutoff
+        if no residue pairs with PAE < pae_cutoff, rank by TM-transformed pae_min (_pae_to_ptm)
+        if pae_block.min() > 10 then _pae_to_ptm(pae_block.min(), d0=1) = 1 / (101) > 0.01, below any meaningful ipSAE score
+        therefore 0 < ipsae_nz < 1 but 
+    """
+    if (pae_block < pae_cutoff).any():
+        return ipsae(pae_block, pae_cutoff)
+    else:
+        return float(_pae_to_ptm(pae_block.min(), d0=1))
 
 def actifpsae(weights_block, pae_block):
     num_tokens = weights_block.max(axis=1).sum() + weights_block.max(axis=0).sum()
@@ -229,3 +244,52 @@ def pinc(pae_block, dist_block, contact_radius=PINC_CONTACT_RADIUS):
     if mask.sum() == 0:
         return 0.0
     return _pinc_contact_prob(pae_block, dist_block, contact_radius)[mask].mean()
+
+def clash(chain1, chain2, cutoff_radius=1.1, min_clashes_for_overlap=100, min_fraction_for_overlap=0.5):
+    # Aims to re-capitulate (but pairwise): https://github.com/google-deepmind/alphafold3/blob/045ffa4c7512f40cc2fcf4c53904bf5da9929466/src/alphafold3/model/confidences.py#L140-L191
+
+    atoms1 = list(chain1.get_atoms())
+    atoms2 = list(chain2.get_atoms())
+    atoms = atoms1 + atoms2
+    coords = np.array([atom.get_coord() for atom in atoms ])
+
+    def res_id(atom_id): return atoms[atom_id].get_parent().id[1]
+    def chain_id(atom_id): return atoms[atom_id].get_parent().get_parent().id
+
+    coord_kdtree = sp.spatial.cKDTree(coords)
+    clashes_per_atom = coord_kdtree.query_ball_point(
+        coords, p=2.0, r=cutoff_radius
+    )
+    per_atom_has_clash = np.zeros(len(coords), dtype=np.int32)
+    for atom_idx, clashing_indices in enumerate(clashes_per_atom):
+        for clashing_idx in clashing_indices:
+            if np.abs(res_id(atom_idx) - res_id(clashing_idx)) > 1 or (
+                chain_id(atom_idx) != chain_id(clashing_idx)
+            ):
+                per_atom_has_clash[atom_idx] = True
+                break
+
+    num_clashes1 = 0
+    num_clashes2 = 0
+    num_atoms1 = len(atoms1)
+    num_atoms2 = len(atoms2)
+    for atom_idx, atom in enumerate(atoms):
+        if chain_id(atom_idx) == chain1.id:
+            num_clashes1 += per_atom_has_clash[ atom_idx ]
+        elif chain_id(atom_idx) == chain2.id:
+            num_clashes2 += per_atom_has_clash[ atom_idx ]
+        else:
+            assert False, 'Unknown chain id'
+
+    frac_clashes1 = num_clashes1 / num_atoms1
+    frac_clashes2 = num_clashes2 / num_atoms2
+
+    num_clashes = max(num_clashes1, num_clashes2)
+    frac_clashes = max(frac_clashes1, frac_clashes2)
+    
+    if (
+        num_clashes > min_clashes_for_overlap
+        or frac_clashes > min_fraction_for_overlap
+    ):
+        return True
+    return False
