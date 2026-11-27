@@ -1,4 +1,4 @@
-import concurrent.futures, functools, gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
+import concurrent.futures, functools, gc, gzip, hashlib, io, itertools, json, os, shutil, subprocess, zipfile
 try:
     from compression import zstd # Python >= 3.14
 except ImportError:
@@ -68,6 +68,25 @@ def test_squashfs(tmp_path):
 
     with pytest.raises(FileExistsError):
         container.Writer(image)
+
+def test_sqfstar_mem(tmp_path):
+    # sqfstar's caches are bounded (its default of 25% of physical memory ignores e.g. Slurm memory limits)
+    phys = os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
+    assert container.sqfstar_mem(1) == min(1 << 30, phys // 4)
+    assert container.sqfstar_mem(64) == min(64 * (32 << 20), phys // 4)
+    with container.Writer(tmp_path / 'test.af3io.sqfs', processors=2) as writer:
+        assert writer._proc.args[writer._proc.args.index('-mem') + 1] == f'{container.sqfstar_mem(2) >> 20}M'
+    with container.Writer(tmp_path / 'mem.af3io.sqfs', mem=64 << 20) as writer:
+        assert writer._proc.args[writer._proc.args.index('-mem') + 1] == '64M'
+
+def test_worker_env(monkeypatch):
+    # Workers are single-threaded even if the number of threads is set already (e.g. by Snakemake)
+    monkeypatch.setenv('OPENBLAS_NUM_THREADS', '48')
+    monkeypatch.delenv('OMP_NUM_THREADS', raising=False)
+    with pipeline._executor(1) as executor:
+        assert executor.submit(os.getenv, 'OPENBLAS_NUM_THREADS').result() == '1'
+        assert executor.submit(os.getenv, 'OMP_NUM_THREADS').result() == '1'
+    assert os.environ['OPENBLAS_NUM_THREADS'] == '48' and 'OMP_NUM_THREADS' not in os.environ
 
 def test_compress_inputs(tmp_path):
     # Archives and compressed files are replaced by their contents, sources are added under their base names
@@ -253,6 +272,22 @@ def test_jsonspan():
         jsonspan.find(text, lambda path: jsonspan.DESCEND) # [[1,,2]] is checked if not selected
     with pytest.raises(ValueError):
         jsonspan.find('{"m": [[1]]]}', lambda path: jsonspan.DESCEND if path == () else jsonspan.SPAN)
+
+def test_compress_no_cycles(alphafold3_examples_dir):
+    # Compressing files leaves no reference cycles, which would keep them (or e.g. the decoded text of a JSON) in memory
+    # until the next full garbage collection: ~1 GB per prediction of 5,000 tokens in every worker
+    files = decompressed_contents(alphafold3_examples_dir / 'tetr_dimer_dna')
+    assert { container.classify(name) for name in files } == set(container.KINDS)
+    for name, data in files.items(): # first, as imports leave garbage
+        pipeline.compress_file(name, data, pipeline.Settings())
+    gc.collect()
+    gc.disable()
+    try:
+        for name, data in files.items():
+            pipeline.compress_file(name, data, pipeline.Settings())
+        assert gc.collect() == 0
+    finally:
+        gc.enable()
 
 def test_compress_data(alphafold3_examples_dir, alphafold3_examples_af3io, tmp_path):
     expected = decompressed_contents(alphafold3_examples_dir)

@@ -218,14 +218,15 @@ def default_jobs():
     return len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
 
 # Workers are single-threaded: without these, every worker starts a thread per core for numpy (OpenBLAS) and pyarrow,
-# which exceeds limits on the number of processes per user on machines with many cores
-_WORKER_ENV = { 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1' }
+# which exceeds limits on the number of processes per user on machines with many cores. Values set already are
+# overridden, e.g. Snakemake sets them to the number of threads of a rule (48 threads in each of 48 workers)
+_WORKER_ENV = dict.fromkeys(['OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'GOTO_NUM_THREADS',
+    'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'], '1')
 
 @contextlib.contextmanager
 def _worker_env():
     saved = { var: os.environ.get(var) for var in _WORKER_ENV }
-    for var, value in _WORKER_ENV.items():
-        os.environ.setdefault(var, value)
+    os.environ.update(_WORKER_ENV)
     try:
         yield
     finally:
@@ -281,7 +282,7 @@ def compress(sources, dest, settings=Settings(), jobs=None, progress=_NoProgress
         'blobs': 0,
     }
     with Writer(dest, level=settings.level, block_size=settings.block_size, processors=jobs) as writer, \
-            progress(sum(map(len, groups)), 'Compressing') as bar, multiprocessing.get_context('spawn').Manager() as manager:
+            progress(sum(map(len, groups)), 'Compressing') as bar, _worker_env(), multiprocessing.get_context('spawn').Manager() as manager:
         known = manager.dict() # blobs written, shared with workers so they skip encoding them again
         with _executor(jobs, initializer=_init_known, initargs=(known,)) as executor:
             for results in _imap(executor, functools.partial(_compress_group, settings=settings), groups, ahead=2 * jobs):

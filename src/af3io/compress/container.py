@@ -81,21 +81,39 @@ def codec(kind):
         return model
     return None
 
+def sqfstar_mem(processors=None):
+    """Memory in bytes for the caches of sqfstar writing with processors threads (default: all CPUs): 32 MB per
+    processor, at least 1 GB, and at most sqfstar's default of 25% of physical memory.
+
+    By default, sqfstar takes 25% of the physical memory of the machine, regardless of limits on the memory of the
+    process (e.g. by Slurm), and keeps every fragment block (small files) it writes in its cache until the cache is
+    full, i.e. grows with the size of the image, up to 512 GB on a machine with 2 TB of memory.
+    """
+    if processors is None:
+        processors = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    mem = max(1 << 30, processors * (32 << 20))
+    try:
+        return min(mem, os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE') // 4)
+    except (ValueError, OSError):
+        return mem
+
 class Writer:
     """Write a new container by streaming a tar file with xattrs in PAX headers into sqfstar. The image is written
-    to a temporary directory next to path, and moved into place by close().
+    to a temporary directory next to path, and moved into place by close(). sqfstar uses up to mem bytes of
+    memory for its caches (default: see sqfstar_mem).
     """
-    def __init__(self, path, level=19, block_size=1 << 20, processors=None):
+    def __init__(self, path, level=19, block_size=1 << 20, processors=None, mem=None):
         self.path = os.fspath(path)
         if os.path.lexists(self.path):
             raise FileExistsError(f'{self.path} already exists')
         self.level, self.block_size = level, block_size
+        mem = mem or sqfstar_mem(processors)
         self._tmpdir = tempfile.mkdtemp(prefix=f'.{os.path.basename(self.path)}.', dir=os.path.dirname(os.path.abspath(self.path)))
         self._image = os.path.join(self._tmpdir, 'image.af3io.sqfs')
         self._log = open(os.path.join(self._tmpdir, 'sqfstar.log'), 'w+b')
         cmd = ['sqfstar', '-comp', 'zstd', '-Xcompression-level', str(level), '-b', str(block_size),
             '-reproducible', '-mkfs-time', '0', '-all-time', '0', '-all-root', '-default-mode', '0755',
-            '-quiet', '-no-progress', *(['-processors', str(processors)] if processors else []), self._image]
+            '-quiet', '-no-progress', '-mem', f'{mem >> 20}M', *(['-processors', str(processors)] if processors else []), self._image]
         try:
             self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=self._log, stderr=self._log)
         except BaseException:

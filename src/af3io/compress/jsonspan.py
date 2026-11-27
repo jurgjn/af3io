@@ -50,45 +50,46 @@ def find(text, select):
     Selected matrices of numbers (e.g. [[0.8,2.8],[3.0,0.05]]) are not checked to contain valid JSON numbers.
     """
     spans = []
-
-    def walk(idx, path):
-        idx = _ws(text, idx)
-        action = select(path)
-        if action == SPAN:
-            end = _skip_matrix(text, idx)
-            if end is None:
-                end = _skip(text, idx)
-            spans.append((path, idx, end))
-            return end
-        char = text[idx:idx + 1]
-        if action == DESCEND and char in ('{', '['):
-            closing = '}' if char == '{' else ']'
-            idx = _ws(text, idx + 1)
-            if text[idx:idx + 1] == closing:
-                return idx + 1
-            index = 0
-            while True:
-                if char == '{':
-                    if text[idx:idx + 1] != '"':
-                        raise ValueError(f'expected object key at {idx}')
-                    key, idx = _scanstring(text, idx + 1)
-                    idx = _ws(text, idx)
-                    if text[idx:idx + 1] != ':':
-                        raise ValueError(f'expected : at {idx}')
-                    idx = walk(idx + 1, (*path, key))
-                else:
-                    idx = walk(idx, (*path, index))
-                    index += 1
-                idx = _ws(text, idx)
-                if text[idx:idx + 1] == ',':
-                    idx = _ws(text, idx + 1)
-                elif text[idx:idx + 1] == closing:
-                    return idx + 1
-                else:
-                    raise ValueError(f'expected , or {closing} at {idx}')
-        return _skip(text, idx)
-
-    end = _ws(text, walk(0, ()))
+    end = _ws(text, _walk(text, 0, (), select, spans))
     if end != len(text):
         raise ValueError(f'extra data at {end}')
     return spans
+
+# Not a closure in find: a nested function calling itself is a reference cycle, which would keep the document (text)
+# in memory until the next full garbage collection, i.e. hundreds of MB per confidences JSON in compress workers
+def _walk(text, idx, path, select, spans):
+    idx = _ws(text, idx)
+    action = select(path)
+    if action == SPAN:
+        end = _skip_matrix(text, idx)
+        if end is None:
+            end = _skip(text, idx)
+        spans.append((path, idx, end))
+        return end
+    char = text[idx:idx + 1]
+    if action == DESCEND and char in ('{', '['):
+        closing = '}' if char == '{' else ']'
+        idx = _ws(text, idx + 1)
+        if text[idx:idx + 1] == closing:
+            return idx + 1
+        index = 0
+        while True:
+            if char == '{':
+                if text[idx:idx + 1] != '"':
+                    raise ValueError(f'expected object key at {idx}')
+                key, idx = _scanstring(text, idx + 1)
+                idx = _ws(text, idx)
+                if text[idx:idx + 1] != ':':
+                    raise ValueError(f'expected : at {idx}')
+                idx = _walk(text, idx + 1, (*path, key), select, spans)
+            else:
+                idx = _walk(text, idx, (*path, index), select, spans)
+                index += 1
+            idx = _ws(text, idx)
+            if text[idx:idx + 1] == ',':
+                idx = _ws(text, idx + 1)
+            elif text[idx:idx + 1] == closing:
+                return idx + 1
+            else:
+                raise ValueError(f'expected , or {closing} at {idx}')
+    return _skip(text, idx)
